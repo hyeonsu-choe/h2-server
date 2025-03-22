@@ -31,7 +31,6 @@ class Server : public Worker {
 		void setReuseSocket(int& server_sock) const;
 		void setNonBlockingSocket(int& server_sock) const;
 		int createListeningSocket(struct sockaddr_in& server_addr, uint16_t server_port);
-		void addEvent(int epfd, int sock, int event_flag);
 		int createEPOLL(int server_sock, size_t epoll_size);
 		struct epoll_event* createEventBucket(size_t size);
 		void startUp(uint16_t port);

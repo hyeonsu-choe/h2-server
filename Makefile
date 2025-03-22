@@ -1,4 +1,5 @@
 CC = g++
+#CXXFLAGS = -g --std=c++11 -I/usr/local/include -L/usr/local/lib
 CXXFLAGS = -g --std=c++11
 LDFLAGS =
 LDLIBS = -lpthread -lnghttp2
