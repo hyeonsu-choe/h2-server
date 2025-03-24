@@ -1,6 +1,6 @@
 CC = g++
 #CXXFLAGS = -g --std=c++11 -I/usr/local/include -L/usr/local/lib
-CXXFLAGS = -g --std=c++11
+CXXFLAGS = -g --std=c++20
 LDFLAGS =
 LDLIBS = -lpthread -lnghttp2
 OBJECTS = $(patsubst %.cc, %.o, $(wildcard *.cc)) # 현재 디렉토리의 *.o 파일들
