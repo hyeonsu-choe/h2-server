@@ -12,7 +12,7 @@
         NGHTTP2_NV_FLAG_NONE                                                   \
   }
 
-const int EPOLL_SIZE = 16;
+const int EPOLL_SIZE = 1024;
 const int BUF_SIZE = 2048;
 
 class http2_stream_data_t {
@@ -270,15 +270,14 @@ static void handle_read(int epfd, int sock, std::shared_ptr<http2_session_data_t
 	while (1) {
 		int read_len = read(sock, buffer, BUF_SIZE);
 		if (read_len == 0) {  // close request
-			epoll_ctl(epfd, EPOLL_CTL_DEL, sock, NULL);
-			close(sock);
-			session_map.erase(sock);
-			std::cout << "closed client[" << sock << "]" << std::endl;
+			disconnect_from_client(epfd, sock);
+	//		std::cout << "closed client[" << sock << "]" << std::endl;
 			break;
 		} else if (read_len < 0) {
 			if (errno == EINTR) { // 인터럽트 시그널로 인한 read 반환
 				continue;
 			}
+
 			if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
 				update_events(epfd, sock, session_data->session);
 			} else {
@@ -287,11 +286,16 @@ static void handle_read(int epfd, int sock, std::shared_ptr<http2_session_data_t
 			}
 			break;
 		} else {
-			nghttp2_ssize feed_len = nghttp2_session_mem_recv2(session_data->session, buffer, read_len);
-			if (feed_len < 0) {
-				std::cout << "Fatal error : " << nghttp2_strerror((int)feed_len) << std::endl;
-				disconnect_from_client(epfd, sock);
-				break;
+			int offset = 0;
+			while (offset < read_len) {
+				nghttp2_ssize fed_len = nghttp2_session_mem_recv2(session_data->session, buffer + offset, read_len - offset);
+				if (fed_len < 0) {
+					std::cout << "Fatal error : " << nghttp2_strerror((int)fed_len) << std::endl;
+					disconnect_from_client(epfd, sock);
+					return;
+				}
+
+				offset += fed_len;
 			}
 		}
 	}
@@ -303,7 +307,8 @@ static void handle_write(int epfd, int sock, std::shared_ptr<http2_session_data_
 		if (session_data->write_offset == 0) {
 			session_data->data_len = nghttp2_session_mem_send2(session_data->session, &session_data->data);
 			if (session_data->data_len <= 0) {
-				//std::cout << "nghttp2_session_mem_send2 error: " << nghttp2_strerror((int)session_data->data_len) << std::endl;
+			//	std::cerr << "nghttp2_session_mem_send2 error: " << nghttp2_strerror((int)session_data->data_len) << std::endl;
+				update_events(epfd, sock, session_data->session);
 				break;
 			}
 		}
@@ -316,10 +321,10 @@ static void handle_write(int epfd, int sock, std::shared_ptr<http2_session_data_
 				if (errno == EAGAIN || errno == EWOULDBLOCK) {
 					update_events(epfd, sock, session_data->session);
 				} else {
-					std::cout << "write error: " << strerror(errno) << std::endl;
+					std::cerr << "write error: " << strerror(errno) << std::endl;
 					disconnect_from_client(epfd, sock);
 				}
-				return;
+				break;
 			} else {
 				session_data->write_offset += written_bytes;
 			}
@@ -423,6 +428,13 @@ void Server::startUp(uint16_t port) {
 void Server::run(uint16_t port) {
 	startUp(port);
 
+
+	cpu_set_t cpuset;
+	CPU_ZERO(&cpuset);
+	CPU_SET(2, &cpuset);
+	pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+
+
 	int clnt_sock = -1;
 	struct sockaddr_in client_addr;
 	socklen_t client_addr_size;
@@ -449,7 +461,7 @@ void Server::run(uint16_t port) {
 						break;
 					} else {
 						setNonBlockingSocket(clnt_sock);
-						std::cout << "client[" << clnt_sock << "] connected ..." << std::endl;
+//						std::cout << "client[" << clnt_sock << "] connected ..." << std::endl;
 
 						// http2 session 생성
 						std::shared_ptr<http2_session_data_t> session_data = std::make_shared<http2_session_data_t>();
@@ -494,7 +506,7 @@ void Server::run(uint16_t port) {
 			}
 		}
 
-		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+//		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 
 	session_map.clear(); // 세션 맵 반납을 명시적으로 수행 (하지 않아도 됨)
