@@ -18,13 +18,16 @@ const int BUF_SIZE = 2048;
 class http2_stream_data_t {
 	public:
 		uint32_t stream_id;
+		int fd;
+		std::string request_path;
 
-		http2_stream_data_t(uint32_t stream_id = 0) : stream_id(stream_id) {
-			//std::cout << __func__ << std::endl;
+		http2_stream_data_t(uint32_t stream_id = 0) : stream_id(stream_id), fd(-1) {
 		}
 
 		~http2_stream_data_t() {
-			//std::cout << __func__ << std::endl;
+			if (fd >= 0) {
+				close(fd);
+			}
 		}
 };
 
@@ -75,24 +78,100 @@ static void update_events(int epfd, int sock, nghttp2_session* session)
 	}
 }
 
-static int send_response(nghttp2_session *session, int32_t stream_id,
-                         nghttp2_nv *nva, size_t nvlen) {
-  int rv = nghttp2_submit_response2(session, stream_id, nva, nvlen, NULL);
-  if (rv != 0) {
-	std::cout << "Fatal error: " << nghttp2_strerror(rv) << std::endl;
-    return -1;
-  }
+static nghttp2_ssize file_read_callback(nghttp2_session* session, int32_t stream_id,
+                                        uint8_t* buf, size_t length,
+                                        uint32_t* data_flags, nghttp2_data_source* source,
+                                        void* user_data )
+{
+    int fd = source->fd;
+    ssize_t r;
 
-  return 0;
+    while ((r = read(fd, buf, length)) == -1 && errno == EINTR);
+
+    if (r == -1) {
+        return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+    }
+
+    if (r == 0) {
+        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+    }
+
+    return (nghttp2_ssize)r;
+}
+
+static int send_response(nghttp2_session *session, int32_t stream_id,
+                         nghttp2_nv *nva, size_t nvlen, int fd) {
+	nghttp2_data_provider2 data_prd;
+	data_prd.source.fd = fd;
+	data_prd.read_callback = file_read_callback;
+
+	int rv = nghttp2_submit_response2(session, stream_id, nva, nvlen, &data_prd);
+	if (rv != 0) {
+		std::cout << "Fatal error: " << nghttp2_strerror(rv) << std::endl;
+		return -1;
+	}
+
+	return 0;
+}
+
+static const char ERROR_HTML[] = "<html><head><title>404</title></head>"
+                                  "<body><h1>404 Not Found</h1></body></html>";
+
+static int error_reply(nghttp2_session* session, http2_stream_data_t* stream_data)
+{
+    int pipefd[2];
+    ssize_t writelen;
+    nghttp2_nv hdrs[] = {MAKE_NV(":status", "404")};
+    int rv;
+
+    rv = pipe(pipefd);
+    if (rv != 0) {
+        rv = nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, stream_data->stream_id, NGHTTP2_INTERNAL_ERROR);
+        if (rv != 0) {
+            std::cerr << "Fatal error : " << nghttp2_strerror(rv) << std::endl;
+            return -1;
+        }
+        return 0;
+    }
+
+    writelen = write(pipefd[1], ERROR_HTML, sizeof(ERROR_HTML) - 1);
+    close(pipefd[1]);
+
+    if (writelen != sizeof(ERROR_HTML) - 1) {
+        close(pipefd[0]);
+        return -1;
+    }
+
+    stream_data->fd = pipefd[0];
+
+    if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), pipefd[0]) < 0) {
+        //return NGHTTP2_ERR_CALLBACK_FAILURE;
+        return -1;
+    }
+
+    return 0;
 }
 
 static int on_request_recv(nghttp2_session* session, http2_session_data_t* session_data, http2_stream_data_t* stream_data)
 {
-	nghttp2_nv resp_hdrs[] = {MAKE_NV(":status", "200")};
-	nghttp2_data_provider* data_prd = nullptr;
+	nghttp2_nv hdrs[] = {MAKE_NV(":status", "200")};
+	const char* rel_path = stream_data->request_path.c_str();
+	for (rel_path = stream_data->request_path.c_str(); *rel_path == '/'; rel_path++);
 
-	if (send_response(session, stream_data->stream_id, resp_hdrs, ARRLEN(resp_hdrs)) < 0) {
-		return -1;
+	int fd = open(rel_path, O_RDONLY);
+	if (fd < 0) {
+		if (error_reply(session, stream_data) != 0) {
+			return NGHTTP2_ERR_CALLBACK_FAILURE;
+		}
+		return 0;
+	}
+
+	stream_data->fd = fd;
+
+//	nghttp2_data_provider* data_prd = nullptr;
+
+	if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), fd) < 0) {
+		return NGHTTP2_ERR_CALLBACK_FAILURE;
 	}
 
 //	if (nghttp2_submit_headers(session, NGHTTP2_FLAG_END_STREAM, stream_data->stream_id, nullptr, resp_hdrs, ARRLEN(resp_hdrs), NULL) < 0) {
@@ -175,9 +254,13 @@ static int on_header_callback(nghttp2_session* session, const nghttp2_frame* fra
 				break;
 			}
 
-			stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
-			if (!stream_data) {
-				break;
+			if (memcmp(PATH, name, namelen) == 0 && namelen == sizeof(PATH) - 1) {
+				stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
+				if (!stream_data) {
+					break;
+				}
+
+				stream_data->request_path = reinterpret_cast<const char*>(value);
 			}
 
 			// 헤더 출력
@@ -411,7 +494,7 @@ struct epoll_event* Server::createEventBucket(size_t size) {
 void Server::startUp(uint16_t port) {
 	try {
 		server_sock = createListeningSocket(addr, port);
-		if (listen(server_sock, 5)==-1) {
+		if (listen(server_sock, 100)==-1) {
 			std::cout << "listen() error" << std::endl;
 			throw -1;
 		}
