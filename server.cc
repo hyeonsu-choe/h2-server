@@ -1,6 +1,7 @@
 #include <nghttp2/nghttp2.h>
 #include <unordered_map>
 #include <list>
+#include <vector> 
 
 #include "server.h"
 
@@ -35,29 +36,46 @@ class http2_session_data_t {
 	public:
 		std::list<std::unique_ptr<http2_stream_data_t>> streams;
 		nghttp2_session* session; // shared_ptr 로 바꿔 보기
-		const uint8_t* data; // weak_ptr로 바꿔 보기
-		nghttp2_ssize data_len;
-		size_t write_offset;
+		std::vector<uint8_t> output_buffer;
+		std::vector<uint8_t> input_buffer;
+		uint32_t events;
 
 	public:
 		http2_session_data_t()
-			: session(nullptr), data(nullptr), data_len(0), write_offset(0) {
-			//std::cout << __func__ << std::endl;
+			: session(nullptr), events(0) {
 		}
 
 		~http2_session_data_t() {
-			//std::cout << __func__ << std::endl;
 			if (session) {
 				nghttp2_session_del(session);
 			}
+		}
+
+		void append_to_output_buffer(const uint8_t* data, size_t length)
+		{
+			output_buffer.insert(output_buffer.end(), data, data + length);
+		}
+
+		void consume_output_buffer(size_t length)
+		{
+			output_buffer.erase(output_buffer.begin(), output_buffer.begin() + length);
+		}
+
+		void append_to_input_buffer(const uint8_t* data, size_t length)
+		{
+			input_buffer.insert(input_buffer.end(), data, data + length);
+		}
+
+		void consume_input_buffer(size_t length)
+		{
+			input_buffer.erase(input_buffer.begin(), input_buffer.begin() + length);
 		}
 };
 
 
 std::unordered_map<int, std::shared_ptr<http2_session_data_t>> session_map; // 나중에 shared_ptr로 바꿀 것
 
-
-void update_event(int epfd, int sock, uint32_t events)
+void update_event2(int epfd, int sock, uint32_t events)
 {
 	struct epoll_event ev;
 	ev.events = events | EPOLLET;
@@ -69,19 +87,40 @@ void update_event(int epfd, int sock, uint32_t events)
 	}
 }
 
-static void update_events(int epfd, int sock, nghttp2_session* session)
+void update_event(int epfd, int sock, uint32_t events, std::shared_ptr<http2_session_data_t> session_data)
 {
-	if (nghttp2_session_want_write(session)) {
-		update_event(epfd, sock, EPOLLIN | EPOLLOUT);
-	} else {
-		update_event(epfd, sock, EPOLLIN);
+	if (session_data->events == events) {
+		return;
 	}
+
+	session_data->events = events;
+
+	struct epoll_event ev;
+	ev.events = events | EPOLLET;
+	ev.data.fd = sock;
+	if (epoll_ctl(epfd, EPOLL_CTL_MOD, sock, &ev) < 0) {
+		if (errno == ENOENT) {
+			epoll_ctl(epfd, EPOLL_CTL_ADD, sock, &ev);
+		}
+	}
+}
+
+static void update_events(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+	uint32_t events = EPOLLIN;
+	if (!session_data->output_buffer.empty() || nghttp2_session_want_write(session_data->session)) {
+		events |= EPOLLOUT;
+		//update_event(epfd, sock, EPOLLIN | EPOLLOUT, session_data);
+	} //else {
+	//	update_event(epfd, sock, EPOLLIN, session_data);
+	//}
+	update_event(epfd, sock, events, session_data);
 }
 
 static nghttp2_ssize file_read_callback(nghttp2_session* session, int32_t stream_id,
                                         uint8_t* buf, size_t length,
                                         uint32_t* data_flags, nghttp2_data_source* source,
-                                        void* user_data )
+                                        void* user_data)
 {
     int fd = source->fd;
     ssize_t r;
@@ -100,7 +139,8 @@ static nghttp2_ssize file_read_callback(nghttp2_session* session, int32_t stream
 }
 
 static int send_response(nghttp2_session *session, int32_t stream_id,
-                         nghttp2_nv *nva, size_t nvlen, int fd) {
+                         nghttp2_nv *nva, size_t nvlen, int fd)
+{
 	nghttp2_data_provider2 data_prd;
 	data_prd.source.fd = fd;
 	data_prd.read_callback = file_read_callback;
@@ -116,38 +156,29 @@ static int send_response(nghttp2_session *session, int32_t stream_id,
 
 static const char ERROR_HTML[] = "<html><head><title>404</title></head>"
                                   "<body><h1>404 Not Found</h1></body></html>";
+static nghttp2_ssize error_read_callback(nghttp2_session* session, int32_t stream_id,
+                                        uint8_t* buf, size_t length,
+                                        uint32_t* data_flags, nghttp2_data_source* source,
+                                        void* user_data )
+{
+	size_t copy_len = std::min(length, strlen(ERROR_HTML));
+	memcpy(buf, ERROR_HTML, std::min(length, copy_len));
+	*data_flags |= NGHTTP2_DATA_FLAG_EOF;
+
+	return copy_len;
+}
 
 static int error_reply(nghttp2_session* session, http2_stream_data_t* stream_data)
 {
-    int pipefd[2];
-    ssize_t writelen;
     nghttp2_nv hdrs[] = {MAKE_NV(":status", "404")};
-    int rv;
+	nghttp2_data_provider2 data_prd;
+	data_prd.read_callback = error_read_callback;
 
-    rv = pipe(pipefd);
-    if (rv != 0) {
-        rv = nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, stream_data->stream_id, NGHTTP2_INTERNAL_ERROR);
-        if (rv != 0) {
-            std::cerr << "Fatal error : " << nghttp2_strerror(rv) << std::endl;
-            return -1;
-        }
-        return 0;
-    }
-
-    writelen = write(pipefd[1], ERROR_HTML, sizeof(ERROR_HTML) - 1);
-    close(pipefd[1]);
-
-    if (writelen != sizeof(ERROR_HTML) - 1) {
-        close(pipefd[0]);
-        return -1;
-    }
-
-    stream_data->fd = pipefd[0];
-
-    if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), pipefd[0]) < 0) {
-        //return NGHTTP2_ERR_CALLBACK_FAILURE;
-        return -1;
-    }
+	int rv = nghttp2_submit_response2(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), &data_prd);
+	if (rv != 0) {
+		std::cout << "Fatal error: " << nghttp2_strerror(rv) << std::endl;
+		return -1;
+	}
 
     return 0;
 }
@@ -160,6 +191,7 @@ static int on_request_recv(nghttp2_session* session, http2_session_data_t* sessi
 
 	int fd = open(rel_path, O_RDONLY);
 	if (fd < 0) {
+		std::cout << "errno: " << errno << ", " << strerror(errno) << std::endl;
 		if (error_reply(session, stream_data) != 0) {
 			return NGHTTP2_ERR_CALLBACK_FAILURE;
 		}
@@ -168,16 +200,9 @@ static int on_request_recv(nghttp2_session* session, http2_session_data_t* sessi
 
 	stream_data->fd = fd;
 
-//	nghttp2_data_provider* data_prd = nullptr;
-
 	if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), fd) < 0) {
 		return NGHTTP2_ERR_CALLBACK_FAILURE;
 	}
-
-//	if (nghttp2_submit_headers(session, NGHTTP2_FLAG_END_STREAM, stream_data->stream_id, nullptr, resp_hdrs, ARRLEN(resp_hdrs), NULL) < 0) {
-//		std::cout << "nghttp2_submit_headers() failure" << std::endl;
-//		return -1;
-//	}
 
 	return 0;
 }
@@ -205,12 +230,9 @@ static int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame 
 	return 0;
 }
 
-static void create_http2_stream_data(http2_session_data_t* session_data, int32_t stream_id)
+static std::unique_ptr<http2_stream_data_t> create_http2_stream_data(http2_session_data_t* session_data, uint32_t stream_id)
 {
-	std::unique_ptr<http2_stream_data_t> stream = std::make_unique<http2_stream_data_t>(stream_id);
-
-	nghttp2_session_set_stream_user_data(session_data->session, stream_id, stream.get());
-	session_data->streams.push_back(std::move(stream));
+	return std::make_unique<http2_stream_data_t>(stream_id);
 }
 
 static void delete_http2_stream_data(http2_session_data_t* session_data, http2_stream_data_t* stream_data)
@@ -223,6 +245,14 @@ static void delete_http2_stream_data(http2_session_data_t* session_data, http2_s
 	if (iter != session_data->streams.end()) {
 		session_data->streams.erase(iter);
 	}
+}
+
+static void add_stream_to_session(http2_session_data_t* session_data, std::unique_ptr<http2_stream_data_t> stream_data)
+{
+	uint32_t stream_id = stream_data->stream_id;
+
+	nghttp2_session_set_stream_user_data(session_data->session, stream_id, stream_data.get());
+	session_data->streams.push_back(std::move(stream_data));
 }
 
 static int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32_t error_code, void* user_data)
@@ -279,15 +309,13 @@ static int on_header_callback(nghttp2_session* session, const nghttp2_frame* fra
 static int on_begin_headers_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
 {
 	http2_session_data_t* session_data = (http2_session_data_t*)user_data;
-	http2_stream_data_t* stream_data;
 
 	if (frame->hd.type != NGHTTP2_HEADERS || frame->headers.cat != NGHTTP2_HCAT_REQUEST) {
 		return 0;
 	}
 
-	create_http2_stream_data(session_data, frame->hd.stream_id);
-//	stream_data = create_http2_stream_data(session_data, frame->hd.stream_id);
-//	nghttp2_session_set_stream_user_data(session, frame->hd.stream_id, stream_data);
+	std::unique_ptr<http2_stream_data_t> stream_data = create_http2_stream_data(session_data, frame->hd.stream_id);
+	add_stream_to_session(session_data, std::move(stream_data));
 
 	return 0;
 }
@@ -310,7 +338,7 @@ static int init_http2_session_data(std::shared_ptr<http2_session_data_t> session
 		}
 
 	} catch (const std::exception& ex) {
-		std::cout << "exception: " << ex.what() << std::endl;
+		std::cerr << "exception: " << ex.what() << std::endl;
 		if (callbacks) {
 			nghttp2_session_callbacks_del(callbacks);
 		}
@@ -339,85 +367,134 @@ static int send_server_connection_header(std::shared_ptr<http2_session_data_t> s
 
 	int rv = nghttp2_submit_settings(session_data->session, NGHTTP2_FLAG_NONE, iv, sizeof(iv) / sizeof(iv[0]));
 	if (rv != 0) {
-		std::cout << "Fatal error: " << nghttp2_strerror(rv) << std::endl;
+		std::cerr << "nghttp2_submit_settings() error: " << nghttp2_strerror(rv) << std::endl;
 		return -1;
 	}
 
 	return 0;
 }
 
-static void handle_read(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
+enum class IOResult {
+	SUCCESS,
+	AGAIN,
+	CLOSED,
+	ERROR
+};
+
+static IOResult fill_input_buffer(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
-	unsigned char buffer[BUF_SIZE + 1] = {0,};
+	unsigned char buffer[BUF_SIZE];
 
 	while (1) {
-		int read_len = read(sock, buffer, BUF_SIZE);
-		if (read_len == 0) {  // close request
-			disconnect_from_client(epfd, sock);
-	//		std::cout << "closed client[" << sock << "]" << std::endl;
-			break;
+		ssize_t read_len = read(sock, buffer, BUF_SIZE);
+		if (read_len == 0) {
+			return IOResult::CLOSED;
 		} else if (read_len < 0) {
 			if (errno == EINTR) { // 인터럽트 시그널로 인한 read 반환
 				continue;
 			}
 
 			if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
-				update_events(epfd, sock, session_data->session);
-			} else {
-				std::cout << "read error" << std::endl;
-				disconnect_from_client(epfd, sock);
-			}
-			break;
-		} else {
-			int offset = 0;
-			while (offset < read_len) {
-				nghttp2_ssize fed_len = nghttp2_session_mem_recv2(session_data->session, buffer + offset, read_len - offset);
-				if (fed_len < 0) {
-					std::cout << "Fatal error : " << nghttp2_strerror((int)fed_len) << std::endl;
-					disconnect_from_client(epfd, sock);
-					return;
-				}
+				return IOResult::AGAIN;
+			} 
 
-				offset += fed_len;
-			}
+			std::cerr << "read() error: " << strerror(errno) << std::endl;
+			return IOResult::ERROR;
 		}
+
+		session_data->append_to_input_buffer(buffer, read_len);
 	}
+
+	return IOResult::SUCCESS;
+}
+
+static IOResult feed_input_buffer(std::shared_ptr<http2_session_data_t> session_data)
+{
+	while (!session_data->input_buffer.empty()) {
+		nghttp2_ssize fed_len = nghttp2_session_mem_recv2(
+				session_data->session,
+				session_data->input_buffer.data(),
+				session_data->input_buffer.size());
+		if (fed_len < 0) {
+			std::cerr << "nghttp2_session_mem_recv2() error: " << nghttp2_strerror((int)fed_len) << std::endl;
+			return IOResult::ERROR;
+		}
+
+		session_data->consume_input_buffer(fed_len);
+	}
+
+	return IOResult::SUCCESS;
+}
+
+static void handle_read(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+	IOResult input_result = fill_input_buffer(sock, session_data);
+	if (input_result == IOResult::CLOSED || input_result == IOResult::ERROR) {
+		disconnect_from_client(epfd, sock);
+		return;
+	}
+
+	IOResult feed_result = feed_input_buffer(session_data);
+	if (feed_result == IOResult::ERROR) {
+		disconnect_from_client(epfd, sock);
+		return;
+	}
+
+	update_events(epfd, sock, session_data);
+
+	if (!nghttp2_session_want_read(session_data->session) &&
+		!nghttp2_session_want_write(session_data->session) &&
+		session_data->output_buffer.empty()) {
+		disconnect_from_client(epfd, sock);
+	}
+}
+
+static void fill_output_buffer(std::shared_ptr<http2_session_data_t> session_data)
+{
+	while (nghttp2_session_want_write(session_data->session)) {
+		const uint8_t* data;
+		size_t length = nghttp2_session_mem_send2(session_data->session, &data);
+		if (length <= 0) {
+			break;
+		}
+		session_data->append_to_output_buffer(data, length);
+	}
+}
+
+static IOResult flush_output_buffer(int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+	while (!session_data->output_buffer.empty()) {
+		ssize_t written_len = write(sock, session_data->output_buffer.data(), session_data->output_buffer.size());
+		if (written_len < 0) {
+			if (errno == EINTR)
+				continue;
+			if (errno == EAGAIN || errno == EWOULDBLOCK)
+				return IOResult::AGAIN; // 현재 처리 할 데이터가 없으므로 다음 EPOLLOUT 때 처리
+
+			std::cerr << "write() error: " << strerror(errno) << std::endl;
+			return IOResult::ERROR;
+		}
+		session_data->consume_output_buffer(written_len);
+	}
+
+	return IOResult::SUCCESS;
 }
 
 static void handle_write(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
-	while (1) {
-		if (session_data->write_offset == 0) {
-			session_data->data_len = nghttp2_session_mem_send2(session_data->session, &session_data->data);
-			if (session_data->data_len <= 0) {
-			//	std::cerr << "nghttp2_session_mem_send2 error: " << nghttp2_strerror((int)session_data->data_len) << std::endl;
-				update_events(epfd, sock, session_data->session);
-				break;
-			}
-		}
+	fill_output_buffer(session_data);
+	IOResult flush_result = flush_output_buffer(sock, session_data);
+	if (flush_result == IOResult::ERROR) {
+		disconnect_from_client(epfd, sock);
+		return;
+	}
 
-		while (session_data->write_offset < session_data->data_len) {
-			int written_bytes = write(sock, session_data->data + session_data->write_offset, session_data->data_len - session_data->write_offset);
-			if (written_bytes == 0) {
-				break;
-			} else if (written_bytes < 0) {
-				if (errno == EAGAIN || errno == EWOULDBLOCK) {
-					update_events(epfd, sock, session_data->session);
-				} else {
-					std::cerr << "write error: " << strerror(errno) << std::endl;
-					disconnect_from_client(epfd, sock);
-				}
-				break;
-			} else {
-				session_data->write_offset += written_bytes;
-			}
-		}
+	update_events(epfd, sock, session_data);
 
-		if (session_data->write_offset >= session_data->data_len) {
-			session_data->write_offset = 0;
-			session_data->data_len = 0;
-			session_data->data = nullptr;
-		}
+	if (!nghttp2_session_want_read(session_data->session) &&
+		!nghttp2_session_want_write(session_data->session) &&
+		session_data->output_buffer.empty()) {
+		disconnect_from_client(epfd, sock);
 	}
 }
 
@@ -441,7 +518,7 @@ void Server::setReuseSocket(int& server_sock) const {
 	if (server_sock > 0) {
 		int opt = true;
 		if (setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, (void*)&opt, sizeof(opt)) < 0) {
-			std::cout << "setsockopt() error" << std::endl;
+			std::cout << "setsockopt() error: " << strerror(errno) << std::endl;
 		}
 	}
 }
@@ -463,7 +540,7 @@ int Server::createListeningSocket(struct sockaddr_in& server_addr, uint16_t serv
 		setNonBlockingSocket(server_sock);
 
 		if (bind(server_sock, (struct sockaddr*)&addr, sizeof(struct sockaddr_in)) == -1) {
-			std::cout << "bind() error" << std::endl;
+			std::cout << "bind() error: " << strerror(errno) << std::endl;
 			throw -1;
 		}
 	}
@@ -474,7 +551,7 @@ int Server::createListeningSocket(struct sockaddr_in& server_addr, uint16_t serv
 int Server::createEPOLL(int server_sock, size_t epoll_size) {
 	int epfd = epoll_create(EPOLL_SIZE);
 	if (epfd <= 0) {
-		std::cout << "epoll_create() error" << std::endl;
+		std::cout << "epoll_create() error: " << strerror(errno) << std::endl;
 		throw -1;
 	}
 
@@ -484,7 +561,7 @@ int Server::createEPOLL(int server_sock, size_t epoll_size) {
 struct epoll_event* Server::createEventBucket(size_t size) {
 	struct epoll_event* ep_events = new struct epoll_event[EPOLL_SIZE];
 	if (!ep_events) {
-		std::cout << "failed to create ep_events" << std::endl;
+		std::cout << "allocation to ep_events error" << std::endl;
 		throw -1;
 	}
 
@@ -500,7 +577,7 @@ void Server::startUp(uint16_t port) {
 		}
 
 		epfd = createEPOLL(server_sock, EPOLL_SIZE);
-		update_event(epfd, server_sock, EPOLLIN);
+		update_event2(epfd, server_sock, EPOLLIN);
 		ep_events = createEventBucket(EPOLL_SIZE);
 	} catch (int execept_code) {
 		std::cout << "program abort due to exception" << std::endl;
@@ -510,14 +587,10 @@ void Server::startUp(uint16_t port) {
 
 void Server::run(uint16_t port) {
 	startUp(port);
-
-
-	cpu_set_t cpuset;
-	CPU_ZERO(&cpuset);
-	CPU_SET(2, &cpuset);
-	pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-
-
+//	cpu_set_t cpuset;
+//	CPU_ZERO(&cpuset);
+//	CPU_SET(2, &cpuset);
+//	pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 	int clnt_sock = -1;
 	struct sockaddr_in client_addr;
 	socklen_t client_addr_size;
@@ -537,7 +610,7 @@ void Server::run(uint16_t port) {
 					clnt_sock = accept(server_sock, (struct sockaddr*)&client_addr, &client_addr_size);
 					if (clnt_sock < 0) {
 						if (errno == EAGAIN || errno == EWOULDBLOCK) {
-
+							//std::cerr << "accept() :  EWOULDBLOCK()" << std::endl;
 						} else {
 							std::cout << "accept() : ERROR" << std::endl;
 						}
@@ -559,11 +632,10 @@ void Server::run(uint16_t port) {
 						}
 
 						// 이벤트 등록 및 소켓과 세션 데이터 등록
-						update_events(epfd, clnt_sock, session_data->session);
+						update_events(epfd, clnt_sock, session_data);
 						session_map.emplace(clnt_sock, session_data);
 					}
 				}
-
 			} else {
 				uint32_t ev = ep_events[i].events;
 				clnt_sock = ep_events[i].data.fd;
