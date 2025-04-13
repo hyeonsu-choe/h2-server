@@ -4,6 +4,7 @@
 #include <vector> 
 
 #include "server.h"
+#include "mapped_file.h"
 
 #define ARRLEN(x) (sizeof(x) / sizeof(x[0]))
 
@@ -16,13 +17,33 @@
 const int EPOLL_SIZE = 1024;
 const int BUF_SIZE = 2048;
 
+class file_context_t {
+	public:
+		size_t size;
+		int offset;
+		const char* data; 
+
+		file_context_t()
+			: size(0), offset(0), data(nullptr)
+		{
+
+		}
+
+		~file_context_t()
+		{
+
+		}
+};
+
 class http2_stream_data_t {
 	public:
 		uint32_t stream_id;
 		int fd;
+		file_context_t file_ctx;
 		std::string request_path;
 
-		http2_stream_data_t(uint32_t stream_id = 0) : stream_id(stream_id), fd(-1) {
+		http2_stream_data_t(uint32_t stream_id = 0)
+			: stream_id(stream_id), fd(-1) {
 		}
 
 		~http2_stream_data_t() {
@@ -74,6 +95,7 @@ class http2_session_data_t {
 
 
 std::unordered_map<int, std::shared_ptr<http2_session_data_t>> session_map; // 나중에 shared_ptr로 바꿀 것
+std::unordered_map<std::string, std::shared_ptr<MappedFile>> file_cache;
 
 void update_event2(int epfd, int sock, uint32_t events)
 {
@@ -108,12 +130,10 @@ void update_event(int epfd, int sock, uint32_t events, std::shared_ptr<http2_ses
 static void update_events(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	uint32_t events = EPOLLIN;
-	if (!session_data->output_buffer.empty() || nghttp2_session_want_write(session_data->session)) {
+	if (nghttp2_session_want_write(session_data->session) || !session_data->output_buffer.empty()) {
 		events |= EPOLLOUT;
-		//update_event(epfd, sock, EPOLLIN | EPOLLOUT, session_data);
-	} //else {
-	//	update_event(epfd, sock, EPOLLIN, session_data);
-	//}
+	}
+
 	update_event(epfd, sock, events, session_data);
 }
 
@@ -122,6 +142,23 @@ static nghttp2_ssize file_read_callback(nghttp2_session* session, int32_t stream
                                         uint32_t* data_flags, nghttp2_data_source* source,
                                         void* user_data)
 {
+	file_context_t* ctx = static_cast<file_context_t*>(source->ptr);
+	if (!ctx) {
+		return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+	}
+
+	size_t remain_len = ctx->size - ctx->offset;
+	size_t copy_len = std::min(length, remain_len);
+
+	memcpy(buf, ctx->data + ctx->offset, copy_len);
+	ctx->offset += copy_len;
+
+	if (ctx->offset == ctx->size) {
+        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+	}
+
+    return (nghttp2_ssize)copy_len;
+	/*
     int fd = source->fd;
     ssize_t r;
 
@@ -136,13 +173,15 @@ static nghttp2_ssize file_read_callback(nghttp2_session* session, int32_t stream
     }
 
     return (nghttp2_ssize)r;
+	*/
 }
 
-static int send_response(nghttp2_session *session, int32_t stream_id,
-                         nghttp2_nv *nva, size_t nvlen, int fd)
+static int send_response(nghttp2_session* session, int32_t stream_id,
+                         nghttp2_nv *nva, size_t nvlen, http2_stream_data_t* stream_data)
 {
 	nghttp2_data_provider2 data_prd;
-	data_prd.source.fd = fd;
+	//data_prd.source.fd = fd;
+	data_prd.source.ptr = &stream_data->file_ctx;
 	data_prd.read_callback = file_read_callback;
 
 	int rv = nghttp2_submit_response2(session, stream_id, nva, nvlen, &data_prd);
@@ -189,18 +228,20 @@ static int on_request_recv(nghttp2_session* session, http2_session_data_t* sessi
 	const char* rel_path = stream_data->request_path.c_str();
 	for (rel_path = stream_data->request_path.c_str(); *rel_path == '/'; rel_path++);
 
-	int fd = open(rel_path, O_RDONLY);
-	if (fd < 0) {
-		std::cout << "errno: " << errno << ", " << strerror(errno) << std::endl;
+	// 삽입 및 검색 실행
+	auto [it, inserted] = file_cache.emplace(rel_path, std::make_shared<MappedFile>(rel_path));
+	if (it->second->get_data() == nullptr) {
+		std::cerr << "no data : " << rel_path << std::endl;
 		if (error_reply(session, stream_data) != 0) {
 			return NGHTTP2_ERR_CALLBACK_FAILURE;
 		}
 		return 0;
 	}
 
-	stream_data->fd = fd;
+	stream_data->file_ctx.data = it->second->get_data();
+	stream_data->file_ctx.size = it->second->get_data_len();
 
-	if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), fd) < 0) {
+	if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), stream_data) < 0) {
 		return NGHTTP2_ERR_CALLBACK_FAILURE;
 	}
 
@@ -665,5 +706,6 @@ void Server::run(uint16_t port) {
 	}
 
 	session_map.clear(); // 세션 맵 반납을 명시적으로 수행 (하지 않아도 됨)
+	file_cache.clear(); // 나중에 redis로 교체 또는 타임 아웃 기능 추가 할 것
 }
 
