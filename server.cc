@@ -5,6 +5,7 @@
 
 #include "server.h"
 #include "mapped_file.h"
+#include "ssl_ctx.h"
 
 #define ARRLEN(x) (sizeof(x) / sizeof(x[0]))
 
@@ -14,8 +15,22 @@
         NGHTTP2_NV_FLAG_NONE                                                   \
   }
 
+
+
 const int EPOLL_SIZE = 1024;
 const int BUF_SIZE = 2048;
+
+enum class IOResult {
+	SUCCESS,
+	AGAIN,
+	CLOSED,
+	ERROR
+};
+
+enum class SessionState {
+	SSL_HANDSHAKING,
+	ESTABLISHED
+};
 
 class file_context_t {
 	public:
@@ -60,15 +75,22 @@ class http2_session_data_t {
 		std::vector<uint8_t> output_buffer;
 		std::vector<uint8_t> input_buffer;
 		uint32_t events;
+		SessionState state;
+		SSL* ssl;
 
 	public:
 		http2_session_data_t()
-			: session(nullptr), events(0) {
+			: session(nullptr), events(0), state(SessionState::SSL_HANDSHAKING), ssl(nullptr) {
 		}
 
 		~http2_session_data_t() {
 			if (session) {
 				nghttp2_session_del(session);
+			}
+
+			if (ssl) {
+				SSL_shutdown(ssl);
+				SSL_free(ssl);
 			}
 		}
 
@@ -93,7 +115,7 @@ class http2_session_data_t {
 		}
 };
 
-
+SSL_CTX* g_ssl_ctx;
 std::unordered_map<int, std::shared_ptr<http2_session_data_t>> session_map; // 나중에 shared_ptr로 바꿀 것
 std::unordered_map<std::string, std::shared_ptr<MappedFile>> file_cache;
 
@@ -137,6 +159,25 @@ static void update_events(int epfd, int sock, std::shared_ptr<http2_session_data
 	update_event(epfd, sock, events, session_data);
 }
 
+static void update_ssl_handshake_events(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+	uint32_t events = 0;
+
+	if (SSL_want_read(session_data->ssl)) {
+		events |= EPOLLIN;
+	}
+
+	if (SSL_want_write(session_data->ssl)) {
+		events |= EPOLLOUT;
+	}
+
+	if (events == 0) {
+		events = EPOLLIN;
+	}
+
+	update_event(epfd, sock, events, session_data);
+}
+
 static nghttp2_ssize file_read_callback(nghttp2_session* session, int32_t stream_id,
                                         uint8_t* buf, size_t length,
                                         uint32_t* data_flags, nghttp2_data_source* source,
@@ -158,22 +199,6 @@ static nghttp2_ssize file_read_callback(nghttp2_session* session, int32_t stream
 	}
 
     return (nghttp2_ssize)copy_len;
-	/*
-    int fd = source->fd;
-    ssize_t r;
-
-    while ((r = read(fd, buf, length)) == -1 && errno == EINTR);
-
-    if (r == -1) {
-        return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
-    }
-
-    if (r == 0) {
-        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
-    }
-
-    return (nghttp2_ssize)r;
-	*/
 }
 
 static int send_response(nghttp2_session* session, int32_t stream_id,
@@ -222,6 +247,7 @@ static int error_reply(nghttp2_session* session, http2_stream_data_t* stream_dat
     return 0;
 }
 
+
 static int on_request_recv(nghttp2_session* session, http2_session_data_t* session_data, http2_stream_data_t* stream_data)
 {
 	nghttp2_nv hdrs[] = {MAKE_NV(":status", "200")};
@@ -229,20 +255,30 @@ static int on_request_recv(nghttp2_session* session, http2_session_data_t* sessi
 	for (rel_path = stream_data->request_path.c_str(); *rel_path == '/'; rel_path++);
 
 	// 삽입 및 검색 실행
-	auto [it, inserted] = file_cache.emplace(rel_path, std::make_shared<MappedFile>(rel_path));
-	if (it->second->get_data() == nullptr) {
-		std::cerr << "no data : " << rel_path << std::endl;
-		if (error_reply(session, stream_data) != 0) {
-			return NGHTTP2_ERR_CALLBACK_FAILURE;
+	auto itr = file_cache.find(rel_path);
+	if (itr == file_cache.end()) {
+		try {
+			auto result = file_cache.emplace(rel_path, std::make_shared<MappedFile>(rel_path));
+			if (!result.second) {
+				std::cerr << "failed to emplace" << std::endl;
+				return 0;	
+			}
+
+			itr = result.first;
+
+		} catch (const std::bad_alloc& except) {
+			std::cerr << "failed to emplace" << except.what() << std::endl;
+			return 0;
 		}
-		return 0;
 	}
 
-	stream_data->file_ctx.data = it->second->get_data();
-	stream_data->file_ctx.size = it->second->get_data_len();
+	if (itr->second->get_data()) {
+		stream_data->file_ctx.data = itr->second->get_data();
+		stream_data->file_ctx.size = itr->second->get_data_len();
 
-	if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), stream_data) < 0) {
-		return NGHTTP2_ERR_CALLBACK_FAILURE;
+		if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), stream_data) < 0) {
+			return NGHTTP2_ERR_CALLBACK_FAILURE;
+		}
 	}
 
 	return 0;
@@ -393,10 +429,22 @@ static int init_http2_session_data(std::shared_ptr<http2_session_data_t> session
 
 static void disconnect_from_client(int epfd, int sock)
 {
+	auto iter = session_map.find(sock);
+	if (iter != session_map.end()) {
+	//	auto session_data = iter->second;
+
+		std::cerr << "disconnect socket[" << sock << "] ref_count=" << iter->second.use_count() << std::endl;
+
+	//	if (session_data->ssl) {
+	//		SSL_shutdown(session_data->ssl);
+	//	}
+	}
+
+
 	epoll_ctl(epfd, EPOLL_CTL_DEL, sock, NULL);
 	close(sock);
 	session_map.erase(sock);
-
+	std::cout << "session_map size: " << session_map.size() << std::endl;
 //	std::cout << "closed client[" << sock << "]" << std::endl;
 }
 
@@ -415,35 +463,36 @@ static int send_server_connection_header(std::shared_ptr<http2_session_data_t> s
 	return 0;
 }
 
-enum class IOResult {
-	SUCCESS,
-	AGAIN,
-	CLOSED,
-	ERROR
-};
-
 static IOResult fill_input_buffer(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	unsigned char buffer[BUF_SIZE];
+	SSL* ssl = session_data->ssl;
 
-	while (1) {
-		ssize_t read_len = read(sock, buffer, BUF_SIZE);
-		if (read_len == 0) {
-			return IOResult::CLOSED;
-		} else if (read_len < 0) {
-			if (errno == EINTR) { // 인터럽트 시그널로 인한 read 반환
-				continue;
+	while (true) {
+		int ret = SSL_read(ssl, buffer, BUF_SIZE);
+		if (ret < 0) {
+			int err = SSL_get_error(ssl, ret);
+			switch (err) {
+				case SSL_ERROR_WANT_READ:
+				case SSL_ERROR_WANT_WRITE:
+					return IOResult::AGAIN;
+				case SSL_ERROR_SYSCALL:
+					if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
+						return IOResult::AGAIN;
+					} 
+					return IOResult::ERROR;
+				case SSL_ERROR_ZERO_RETURN:
+					return IOResult::CLOSED;
+				default:
+					std::cerr << "SSL_read() error: " << strerror(errno) << std::endl;
+					return IOResult::ERROR;
 			}
-
-			if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
-				return IOResult::AGAIN;
-			} 
-
-			std::cerr << "read() error: " << strerror(errno) << std::endl;
-			return IOResult::ERROR;
 		}
 
-		session_data->append_to_input_buffer(buffer, read_len);
+		session_data->append_to_input_buffer(buffer, ret);
+		if (ret < BUF_SIZE) {
+			break;
+		}
 	}
 
 	return IOResult::SUCCESS;
@@ -504,20 +553,28 @@ static void fill_output_buffer(std::shared_ptr<http2_session_data_t> session_dat
 
 static IOResult flush_output_buffer(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
+	SSL* ssl = session_data->ssl;
+
 	while (!session_data->output_buffer.empty()) {
-		ssize_t written_len = write(sock, session_data->output_buffer.data(), session_data->output_buffer.size());
-		if (written_len < 0) {
-			if (errno == EINTR)
-				continue;
-			if (errno == EAGAIN || errno == EWOULDBLOCK)
-				return IOResult::AGAIN; // 현재 처리 할 데이터가 없으므로 다음 EPOLLOUT 때 처리
-
-			std::cerr << "write() error: " << strerror(errno) << std::endl;
-			return IOResult::ERROR;
+		int ret = SSL_write(ssl, session_data->output_buffer.data(), session_data->output_buffer.size());
+		if (ret <= 0) {
+			int err = SSL_get_error(ssl, ret);
+			switch (err) {
+				case SSL_ERROR_WANT_READ:
+				case SSL_ERROR_WANT_WRITE:
+					return IOResult::AGAIN;
+				case SSL_ERROR_SYSCALL:
+					if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
+						return IOResult::AGAIN;
+					} 
+					return IOResult::ERROR;
+				default:
+					std::cerr << "SSL_write() error: " << strerror(errno) << std::endl;
+					return IOResult::ERROR;
+			}
 		}
-		session_data->consume_output_buffer(written_len);
+		session_data->consume_output_buffer(ret);
 	}
-
 	return IOResult::SUCCESS;
 }
 
@@ -536,6 +593,123 @@ static void handle_write(int epfd, int sock, std::shared_ptr<http2_session_data_
 		!nghttp2_session_want_write(session_data->session) &&
 		session_data->output_buffer.empty()) {
 		disconnect_from_client(epfd, sock);
+	}
+}
+
+void handle_ssl_accept(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+	SSL* ssl = session_data->ssl;
+
+	int ret = SSL_accept(ssl);
+	if (ret > 0) {
+		const unsigned char* alpn_proto = nullptr;
+		unsigned int alpn_proto_len = 0;
+
+		SSL_get0_alpn_selected(ssl, &alpn_proto, &alpn_proto_len);
+		if (alpn_proto == NULL || alpn_proto_len != 2 || memcmp("h2", alpn_proto, 2) != 0) {
+			std::cerr << "alpn protocol is not h2" << std::endl;
+			disconnect_from_client(epfd, sock);
+			return;
+		}
+
+		if (send_server_connection_header(session_data) != 0) {
+			disconnect_from_client(epfd, sock);
+			return;
+		}
+
+		session_data->state = SessionState::ESTABLISHED;
+
+		// 이벤트 등록 및 소켓과 세션 데이터 등록
+		update_events(epfd, sock, session_data);
+	} else {
+		int ssl_err = SSL_get_error(ssl, ret);
+		switch (ssl_err) {
+			case SSL_ERROR_WANT_READ:
+			case SSL_ERROR_WANT_WRITE:
+				update_ssl_handshake_events(epfd, sock, session_data);
+				return;
+			default:
+				//std::cerr << "unexpected SSL error: " << ssl_err << std::endl;
+				disconnect_from_client(epfd, sock);
+		}
+	}
+
+}
+
+void Server::handle_accept()
+{
+	struct sockaddr_in client_addr;
+	socklen_t client_addr_size = sizeof(client_addr);
+	int clnt_sock = -1;
+
+	while (true) {
+		clnt_sock = accept(server_sock, (struct sockaddr*)&client_addr, &client_addr_size);
+		if (clnt_sock < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				//std::cerr << "accept() :  EWOULDBLOCK()" << std::endl;
+			} else {
+				std::cout << "accept() error : " << strerror(errno) << std::endl;
+			}
+			break;
+		} else {
+			setNonBlockingSocket(clnt_sock);
+			//std::cout << "client[" << clnt_sock << "] connected ..." << std::endl;
+
+			// http2 session 생성
+			std::shared_ptr<http2_session_data_t> session_data = std::make_shared<http2_session_data_t>();
+			if (init_http2_session_data(session_data) != 0) {
+				close(clnt_sock);
+				continue;
+			}
+
+			SSL* ssl = SSL_new(g_ssl_ctx);
+			SSL_set_fd(ssl, clnt_sock);
+			session_data->ssl = ssl;
+
+			int ret = SSL_accept(ssl);
+			if (ret > 0) {
+				const unsigned char* alpn_proto = nullptr;
+				unsigned int alpn_proto_len = 0;
+				SSL_get0_alpn_selected(ssl, &alpn_proto, &alpn_proto_len);
+
+				//printf("[+] alpn : %.*s\n", alpn_proto_len, alpn_proto);
+
+				if (alpn_proto == NULL || alpn_proto_len != 2 || memcmp("h2", alpn_proto, 2) != 0) {
+					std::cerr << "alpn protocol is not h2" << std::endl;
+					close(clnt_sock);
+					continue;
+				}
+
+			} else {
+				int ssl_err = SSL_get_error(ssl, ret);
+				switch (ssl_err) {
+					case SSL_ERROR_WANT_READ:
+					case SSL_ERROR_WANT_WRITE:
+						//std::cerr << "non-blocking I/O: try again later" << std::endl;
+						update_ssl_handshake_events(epfd, clnt_sock, session_data);
+						session_map.emplace(clnt_sock, session_data);
+						break;
+					default:
+						std::cerr << "unexpected SSL error: " << ssl_err << std::endl;
+						close(clnt_sock);
+						break;
+				}
+
+				continue;
+
+			}
+
+			if (send_server_connection_header(session_data) != 0) {
+				close(clnt_sock);
+				continue;
+			}
+
+			session_data->state = SessionState::ESTABLISHED;
+
+			// 이벤트 등록 및 소켓과 세션 데이터 등록
+			update_events(epfd, clnt_sock, session_data);
+			session_map.emplace(clnt_sock, session_data);
+		}
 	}
 }
 
@@ -628,13 +802,16 @@ void Server::startUp(uint16_t port) {
 
 void Server::run(uint16_t port) {
 	startUp(port);
+
+    SSL_load_error_strings();
+	OpenSSL_add_ssl_algorithms();
+
+	g_ssl_ctx = create_ssl_ctx("server.key", "server.crt");
+
 //	cpu_set_t cpuset;
 //	CPU_ZERO(&cpuset);
 //	CPU_SET(2, &cpuset);
 //	pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-	int clnt_sock = -1;
-	struct sockaddr_in client_addr;
-	socklen_t client_addr_size;
 	struct epoll_event event;
 
 	while (!isShutdown()) {
@@ -646,46 +823,21 @@ void Server::run(uint16_t port) {
 
 		for (uint32_t i = 0; i < actived_event_count; i++) {
 			if (ep_events[i].data.fd == server_sock) {
-				client_addr_size = sizeof(client_addr);
-				while (true) {
-					clnt_sock = accept(server_sock, (struct sockaddr*)&client_addr, &client_addr_size);
-					if (clnt_sock < 0) {
-						if (errno == EAGAIN || errno == EWOULDBLOCK) {
-							//std::cerr << "accept() :  EWOULDBLOCK()" << std::endl;
-						} else {
-							std::cout << "accept() : ERROR" << std::endl;
-						}
-						break;
-					} else {
-						setNonBlockingSocket(clnt_sock);
-//						std::cout << "client[" << clnt_sock << "] connected ..." << std::endl;
-
-						// http2 session 생성
-						std::shared_ptr<http2_session_data_t> session_data = std::make_shared<http2_session_data_t>();
-						if (init_http2_session_data(session_data) != 0) {
-							close(clnt_sock);
-							continue;
-						}
-
-						if (send_server_connection_header(session_data) != 0) {
-							close(clnt_sock);
-							continue;
-						}
-
-						// 이벤트 등록 및 소켓과 세션 데이터 등록
-						update_events(epfd, clnt_sock, session_data);
-						session_map.emplace(clnt_sock, session_data);
-					}
-				}
+				handle_accept();
 			} else {
 				uint32_t ev = ep_events[i].events;
-				clnt_sock = ep_events[i].data.fd;
+				int clnt_sock = ep_events[i].data.fd;
 
 				auto iter = session_map.find(clnt_sock);
 				if (iter != session_map.end()) {
 					std::shared_ptr<http2_session_data_t> session_data = iter->second;
 					if (!iter->second) {
 						std::cout << "session_data doesn't exist" << std::endl;
+						continue;
+					}
+
+					if (session_data->state == SessionState::SSL_HANDSHAKING) {
+						handle_ssl_accept(epfd, clnt_sock, session_data);
 						continue;
 					}
 
@@ -707,5 +859,9 @@ void Server::run(uint16_t port) {
 
 	session_map.clear(); // 세션 맵 반납을 명시적으로 수행 (하지 않아도 됨)
 	file_cache.clear(); // 나중에 redis로 교체 또는 타임 아웃 기능 추가 할 것
+					
+	if (g_ssl_ctx) {
+		SSL_CTX_free(g_ssl_ctx);
+	}
 }
 

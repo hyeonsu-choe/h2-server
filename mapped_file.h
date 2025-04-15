@@ -19,7 +19,8 @@ class MappedFile {
             if (path != nullptr) {
                 int fd = open(path, O_RDONLY);
                 if (fd == -1) {
-                    perror("open");
+					printf("open()\n");
+                    //perror("open");
                     return;
                 }
 

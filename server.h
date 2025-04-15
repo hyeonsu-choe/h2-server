@@ -34,6 +34,7 @@ class Server : public Worker {
 		int createEPOLL(int server_sock, size_t epoll_size);
 		struct epoll_event* createEventBucket(size_t size);
 		void startUp(uint16_t port);
+		void handle_accept();
 
 	public:
 		Server();

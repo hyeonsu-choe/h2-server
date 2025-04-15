@@ -1,25 +1,28 @@
-CC = g++
+CXX = g++
 #CXXFLAGS = -g --std=c++11 -I/usr/local/include -L/usr/local/lib
 CXXFLAGS = -g --std=c++20
+CXXFLAGS += -MMD -MP #의존성 작성
 LDFLAGS =
-LDLIBS = -lpthread -lnghttp2
-OBJECTS = $(patsubst %.cc, %.o, $(wildcard *.cc)) # 현재 디렉토리의 *.o 파일들
+LDLIBS = -lpthread -lnghttp2 -lssl -lcrypto
+OBJS = $(patsubst %.cc, %.o, $(wildcard *.cc)) # 현재 디렉토리의 *.o 파일들
+DEPS = $(OBJS:.o=.d)
 TARGET = h2_server
 
 .PHONY : all
 all : $(TARGET)
 
-$(TARGET) : $(OBJECTS) 
-	$(CC) $(CXXFLAGS) -o $@ $^ $(LDLIBS)
+$(TARGET) : $(OBJS) 
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-%.o : %.cc 
-	$(CC) $(CXXFLAGS) -c -o $@ $< 
+%.o : %.cc
+	$(CXX) $(CXXFLAGS) -c -o $@ $< 
+
+-include $(DEPS)
 
 .PHONY : clean debug
 clean :
-	rm -rf $(OBJECTS)
-	rm -rf $(TARGET)
+	rm -rf $(OBJS) $(DEPS) $(TARGET)
 
 debug :
-	@echo $(OBJECTS)
+	@echo $(OBJS)
 
