@@ -15,8 +15,6 @@
         NGHTTP2_NV_FLAG_NONE                                                   \
   }
 
-
-
 const int EPOLL_SIZE = 1024;
 const int BUF_SIZE = 2048;
 
@@ -28,7 +26,10 @@ enum class IOResult {
 };
 
 enum class SessionState {
-	SSL_HANDSHAKING,
+	CONNECTING,
+	DISCONNECTING,
+	TLS_HANDSHAKING,
+	ESTABLISHING,
 	ESTABLISHED
 };
 
@@ -53,18 +54,14 @@ class file_context_t {
 class http2_stream_data_t {
 	public:
 		uint32_t stream_id;
-		int fd;
 		file_context_t file_ctx;
 		std::string request_path;
 
 		http2_stream_data_t(uint32_t stream_id = 0)
-			: stream_id(stream_id), fd(-1) {
+			: stream_id(stream_id) {
 		}
 
 		~http2_stream_data_t() {
-			if (fd >= 0) {
-				close(fd);
-			}
 		}
 };
 
@@ -80,7 +77,7 @@ class http2_session_data_t {
 
 	public:
 		http2_session_data_t()
-			: session(nullptr), events(0), state(SessionState::SSL_HANDSHAKING), ssl(nullptr) {
+			: session(nullptr), events(0), state(SessionState::CONNECTING), ssl(nullptr) {
 		}
 
 		~http2_session_data_t() {
@@ -215,7 +212,6 @@ static int send_response(nghttp2_session* session, int32_t stream_id,
                          nghttp2_nv *nva, size_t nvlen, http2_stream_data_t* stream_data)
 {
 	nghttp2_data_provider2 data_prd;
-	//data_prd.source.fd = fd;
 	data_prd.source.ptr = &stream_data->file_ctx;
 	data_prd.read_callback = file_read_callback;
 
@@ -308,6 +304,13 @@ static int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame 
 					return 0;
 				}
 				return on_request_recv(session, session_data, stream_data);
+			}
+			break;
+		case NGHTTP2_GOAWAY:
+			{
+				uint32_t last_stream_id = nghttp2_session_get_last_proc_stream_id(session);
+				nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, last_stream_id, NGHTTP2_NO_ERROR, nullptr, 0);
+				session_data->state = SessionState::DISCONNECTING;
 			}
 			break;
 		default:
@@ -459,6 +462,16 @@ static int send_server_connection_header(std::shared_ptr<http2_session_data_t> s
 	return 0;
 }
 
+static void disconnect_from_client_if_done(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+	if (session_data->state == SessionState::DISCONNECTING &&
+		!nghttp2_session_want_read(session_data->session) &&
+		!nghttp2_session_want_write(session_data->session) &&
+		session_data->output_buffer.empty()) {
+		disconnect_from_client(epfd, sock);
+	}
+}
+
 static IOResult fill_input_buffer(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	unsigned char buffer[BUF_SIZE];
@@ -527,12 +540,7 @@ static void handle_read(int epfd, int sock, std::shared_ptr<http2_session_data_t
 	}
 
 	update_events(epfd, sock, session_data);
-
-	if (!nghttp2_session_want_read(session_data->session) &&
-		!nghttp2_session_want_write(session_data->session) &&
-		session_data->output_buffer.empty()) {
-		disconnect_from_client(epfd, sock);
-	}
+	disconnect_from_client_if_done(epfd, sock, session_data);
 }
 
 static void fill_output_buffer(std::shared_ptr<http2_session_data_t> session_data)
@@ -584,52 +592,72 @@ static void handle_write(int epfd, int sock, std::shared_ptr<http2_session_data_
 	}
 
 	update_events(epfd, sock, session_data);
-
-	if (!nghttp2_session_want_read(session_data->session) &&
-		!nghttp2_session_want_write(session_data->session) &&
-		session_data->output_buffer.empty()) {
-		disconnect_from_client(epfd, sock);
-	}
+	disconnect_from_client_if_done(epfd, sock, session_data);
 }
 
-void handle_ssl_accept(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
+static bool validate_alpn(std::shared_ptr<http2_session_data_t> session_data)
+{
+	const unsigned char* alpn_proto = nullptr;
+	unsigned int alpn_proto_len = 0;
+
+	SSL_get0_alpn_selected(session_data->ssl, &alpn_proto, &alpn_proto_len);
+	if (alpn_proto == NULL || alpn_proto_len != 2 || memcmp("h2", alpn_proto, 2) != 0) {
+		std::cerr << "alpn protocol is not h2" << std::endl;
+		return false;
+	}
+	return true;
+}
+
+SessionState do_tls_handshake(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	SSL* ssl = session_data->ssl;
 
 	int ret = SSL_accept(ssl);
 	if (ret > 0) {
-		const unsigned char* alpn_proto = nullptr;
-		unsigned int alpn_proto_len = 0;
-
-		SSL_get0_alpn_selected(ssl, &alpn_proto, &alpn_proto_len);
-		if (alpn_proto == NULL || alpn_proto_len != 2 || memcmp("h2", alpn_proto, 2) != 0) {
-			std::cerr << "alpn protocol is not h2" << std::endl;
-			disconnect_from_client(epfd, sock);
-			return;
+		if (validate_alpn(session_data)) {
+			return SessionState::ESTABLISHING;
 		}
-
-		if (send_server_connection_header(session_data) != 0) {
-			disconnect_from_client(epfd, sock);
-			return;
-		}
-
-		session_data->state = SessionState::ESTABLISHED;
-
-		// 이벤트 등록 및 소켓과 세션 데이터 등록
-		update_events(epfd, sock, session_data);
+		return SessionState::DISCONNECTING;
 	} else {
 		int ssl_err = SSL_get_error(ssl, ret);
-		switch (ssl_err) {
-			case SSL_ERROR_WANT_READ:
-			case SSL_ERROR_WANT_WRITE:
-				update_ssl_handshake_events(epfd, sock, session_data);
-				return;
-			default:
-				//std::cerr << "unexpected SSL error: " << ssl_err << std::endl;
-				disconnect_from_client(epfd, sock);
+		if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+			update_ssl_handshake_events(epfd, sock, session_data);
+			return SessionState::TLS_HANDSHAKING;
+		} else {
+			std::cerr << "unexpected SSL error: " << ERR_error_string(ssl_err, nullptr) << std::endl;
+			return SessionState::DISCONNECTING;
 		}
 	}
+}
 
+SessionState establish_connection(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+	if (send_server_connection_header(session_data) != 0) {
+		std::cerr << "send_server_connection() error" << std::endl;
+		return SessionState::DISCONNECTING;
+	}
+
+	return SessionState::ESTABLISHED;
+}
+
+void handle_tls_handshake(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+	SessionState session_state = do_tls_handshake(epfd, sock, session_data);
+	if (session_state == SessionState::DISCONNECTING) {
+		disconnect_from_client(epfd, sock);
+		return;
+	} else if (session_state == SessionState::TLS_HANDSHAKING) {
+		return;
+	}
+
+	session_state = establish_connection(epfd, sock, session_data);
+	if (session_state == SessionState::DISCONNECTING) {
+		disconnect_from_client(epfd, sock);
+		return;
+	}
+
+	session_data->state = session_state;
+	update_events(epfd, sock, session_data);
 }
 
 void Server::handle_accept()
@@ -657,54 +685,29 @@ void Server::handle_accept()
 				close(clnt_sock);
 				continue;
 			}
+			session_map.emplace(clnt_sock, session_data);
 
 			SSL* ssl = SSL_new(g_ssl_ctx);
 			SSL_set_fd(ssl, clnt_sock);
 			session_data->ssl = ssl;
 
-			int ret = SSL_accept(ssl);
-			if (ret > 0) {
-				const unsigned char* alpn_proto = nullptr;
-				unsigned int alpn_proto_len = 0;
-				SSL_get0_alpn_selected(ssl, &alpn_proto, &alpn_proto_len);
-
-				//printf("[+] alpn : %.*s\n", alpn_proto_len, alpn_proto);
-
-				if (alpn_proto == NULL || alpn_proto_len != 2 || memcmp("h2", alpn_proto, 2) != 0) {
-					std::cerr << "alpn protocol is not h2" << std::endl;
-					close(clnt_sock);
-					continue;
-				}
-
-			} else {
-				int ssl_err = SSL_get_error(ssl, ret);
-				switch (ssl_err) {
-					case SSL_ERROR_WANT_READ:
-					case SSL_ERROR_WANT_WRITE:
-						//std::cerr << "non-blocking I/O: try again later" << std::endl;
-						update_ssl_handshake_events(epfd, clnt_sock, session_data);
-						session_map.emplace(clnt_sock, session_data);
-						break;
-					default:
-						std::cerr << "unexpected SSL error: " << ssl_err << std::endl;
-						close(clnt_sock);
-						break;
-				}
-
+			SessionState session_state = do_tls_handshake(epfd, clnt_sock, session_data);
+			if (session_state == SessionState::DISCONNECTING) {
+				disconnect_from_client(epfd, clnt_sock);
 				continue;
-
-			}
-
-			if (send_server_connection_header(session_data) != 0) {
-				close(clnt_sock);
+			} else if (session_state == SessionState::TLS_HANDSHAKING) {
+				session_data->state = session_state;
 				continue;
 			}
 
-			session_data->state = SessionState::ESTABLISHED;
+			session_state = establish_connection(epfd, clnt_sock, session_data);
+			if (session_state == SessionState::DISCONNECTING) {
+				disconnect_from_client(epfd, clnt_sock);
+				continue;
+			}
 
-			// 이벤트 등록 및 소켓과 세션 데이터 등록
+			session_data->state = session_state;
 			update_events(epfd, clnt_sock, session_data);
-			session_map.emplace(clnt_sock, session_data);
 		}
 	}
 }
@@ -796,18 +799,14 @@ void Server::startUp(uint16_t port) {
 	}
 }
 
-void Server::run(uint16_t port) {
+void Server::listen_and_serve(const uint16_t port, const char* key_path, const char* crt_path) {
 	startUp(port);
 
     SSL_load_error_strings();
 	OpenSSL_add_ssl_algorithms();
 
-	g_ssl_ctx = create_ssl_ctx("server.key", "server.crt");
+	g_ssl_ctx = create_ssl_ctx(key_path, crt_path);
 
-//	cpu_set_t cpuset;
-//	CPU_ZERO(&cpuset);
-//	CPU_SET(2, &cpuset);
-//	pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 	struct epoll_event event;
 
 	while (!isShutdown()) {
@@ -832,8 +831,8 @@ void Server::run(uint16_t port) {
 						continue;
 					}
 
-					if (session_data->state == SessionState::SSL_HANDSHAKING) {
-						handle_ssl_accept(epfd, clnt_sock, session_data);
+					if (session_data->state == SessionState::TLS_HANDSHAKING) {
+						handle_tls_handshake(epfd, clnt_sock, session_data);
 						continue;
 					}
 
@@ -854,8 +853,6 @@ void Server::run(uint16_t port) {
 				}
 			}
 		}
-
-//		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 
 	session_map.clear(); // 세션 맵 반납을 명시적으로 수행 (하지 않아도 됨)

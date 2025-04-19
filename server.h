@@ -39,6 +39,6 @@ class Server : public Worker {
 	public:
 		Server();
 		~Server();
-		void run(uint16_t port);
+		void listen_and_serve(const uint16_t port, const char* key_path, const char* crt_path);
 		//void operator()();
 };

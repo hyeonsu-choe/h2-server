@@ -6,7 +6,7 @@ LDFLAGS =
 LDLIBS = -lpthread -lnghttp2 -lssl -lcrypto
 OBJS = $(patsubst %.cc, %.o, $(wildcard *.cc)) # 현재 디렉토리의 *.o 파일들
 DEPS = $(OBJS:.o=.d)
-TARGET = h2_server
+TARGET = h2cov
 
 .PHONY : all
 all : $(TARGET)
