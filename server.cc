@@ -140,7 +140,7 @@ void update_event(int epfd, int sock, uint32_t events, std::shared_ptr<http2_ses
 	session_data->events = events;
 
 	struct epoll_event ev;
-	ev.events = events | EPOLLET;
+	ev.events = events | EPOLLET | EPOLLRDHUP;
 	ev.data.fd = sock;
 	if (epoll_ctl(epfd, EPOLL_CTL_MOD, sock, &ev) < 0) {
 		if (errno == ENOENT) {
@@ -151,10 +151,20 @@ void update_event(int epfd, int sock, uint32_t events, std::shared_ptr<http2_ses
 
 static void update_events(int epfd, int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
-	uint32_t events = EPOLLIN;
-	if (nghttp2_session_want_write(session_data->session) || !session_data->output_buffer.empty()) {
+	uint32_t events = 0;
+	
+	if (SSL_want_read(session_data->ssl) ||
+		nghttp2_session_want_read(session_data->session)) {
+		events |= EPOLLIN;
+	}
+
+	if (SSL_want_write(session_data->ssl) ||
+		nghttp2_session_want_write(session_data->session) ||
+		!session_data->output_buffer.empty()) {
 		events |= EPOLLOUT;
 	}
+
+	if (!events) events = EPOLLIN; // default로 하지 않는 것은 EPOLLIN만 무조건 등록이 유지되어 부하가 생기는 것을 방지
 
 	update_event(epfd, sock, events, session_data);
 }
@@ -429,23 +439,9 @@ static int init_http2_session_data(std::shared_ptr<http2_session_data_t> session
 
 static void disconnect_from_client(int epfd, int sock)
 {
-	auto iter = session_map.find(sock);
-	if (iter != session_map.end()) {
-	//	auto session_data = iter->second;
-
-		std::cerr << "disconnect socket[" << sock << "] ref_count=" << iter->second.use_count() << std::endl;
-
-	//	if (session_data->ssl) {
-	//		SSL_shutdown(session_data->ssl);
-	//	}
-	}
-
-
 	epoll_ctl(epfd, EPOLL_CTL_DEL, sock, NULL);
 	close(sock);
 	session_map.erase(sock);
-	std::cout << "session_map size: " << session_map.size() << std::endl;
-//	std::cout << "closed client[" << sock << "]" << std::endl;
 }
 
 static int send_server_connection_header(std::shared_ptr<http2_session_data_t> session_data)
@@ -557,7 +553,7 @@ static IOResult flush_output_buffer(int sock, std::shared_ptr<http2_session_data
 
 	while (!session_data->output_buffer.empty()) {
 		int ret = SSL_write(ssl, session_data->output_buffer.data(), session_data->output_buffer.size());
-		if (ret <= 0) {
+		if (ret < 0) {
 			int err = SSL_get_error(ssl, ret);
 			switch (err) {
 				case SSL_ERROR_WANT_READ:
@@ -566,7 +562,7 @@ static IOResult flush_output_buffer(int sock, std::shared_ptr<http2_session_data
 				case SSL_ERROR_SYSCALL:
 					if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
 						return IOResult::AGAIN;
-					} 
+					}
 					return IOResult::ERROR;
 				default:
 					std::cerr << "SSL_write() error: " << strerror(errno) << std::endl;
@@ -815,13 +811,13 @@ void Server::run(uint16_t port) {
 	struct epoll_event event;
 
 	while (!isShutdown()) {
-		uint32_t actived_event_count = epoll_wait(epfd, ep_events, EPOLL_SIZE, -1);
-		if (actived_event_count < 0) {
+		uint32_t event_count = epoll_wait(epfd, ep_events, EPOLL_SIZE, -1);
+		if (event_count < 0) {
 			std::cout << "epoll_wait() error" << std::endl;
 			break;
 		}
 
-		for (uint32_t i = 0; i < actived_event_count; i++) {
+		for (uint32_t i = 0; i < event_count; i++) {
 			if (ep_events[i].data.fd == server_sock) {
 				handle_accept();
 			} else {
@@ -838,6 +834,11 @@ void Server::run(uint16_t port) {
 
 					if (session_data->state == SessionState::SSL_HANDSHAKING) {
 						handle_ssl_accept(epfd, clnt_sock, session_data);
+						continue;
+					}
+
+					if (ev & EPOLLRDHUP) { // SSL_read로 확인이 어려운 FIN만 오는 경우 확인
+						disconnect_from_client(epfd, clnt_sock);
 						continue;
 					}
 
