@@ -6,7 +6,7 @@
 #include <nghttp2/nghttp2.h>
 #include <openssl/ssl.h>
 
-#include "file_context.h"
+#include "file_cache.h"
 
 enum class SessionState {
 	CONNECTING,

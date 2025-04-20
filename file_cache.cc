@@ -5,8 +5,7 @@
 #include <unordered_map>
 #include <string>
 
-#include "file_context.h"
-//#include "mapped_file.h"
+#include "file_cache.h"
 
 static std::unordered_map<std::string, std::shared_ptr<MappedFile>> file_cache;
 
