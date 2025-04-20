@@ -26,7 +26,6 @@ class Server : public Worker {
 		int server_sock;
 		struct sockaddr_in addr;
 		struct epoll_event *ep_events;
-		//uint16_t port;
 
 		void setReuseSocket(int& server_sock) const;
 		void setNonBlockingSocket(int& server_sock) const;
@@ -40,5 +39,4 @@ class Server : public Worker {
 		Server();
 		~Server();
 		void listen_and_serve(const uint16_t port, const char* key_path, const char* crt_path);
-		//void operator()();
 };

@@ -4,16 +4,10 @@
 #include <vector> 
 
 #include "server.h"
-#include "mapped_file.h"
+#include "http2_session.h"
+#include "file_context.h"
+//#include "mapped_file.h"
 #include "ssl_ctx.h"
-
-#define ARRLEN(x) (sizeof(x) / sizeof(x[0]))
-
-#define MAKE_NV(NAME, VALUE)                                                   \
-  {                                                                            \
-    (uint8_t *)NAME, (uint8_t *)VALUE, sizeof(NAME) - 1, sizeof(VALUE) - 1,    \
-        NGHTTP2_NV_FLAG_NONE                                                   \
-  }
 
 const int EPOLL_SIZE = 1024;
 const int BUF_SIZE = 2048;
@@ -25,96 +19,9 @@ enum class IOResult {
 	ERROR
 };
 
-enum class SessionState {
-	CONNECTING,
-	DISCONNECTING,
-	TLS_HANDSHAKING,
-	ESTABLISHING,
-	ESTABLISHED
-};
-
-class file_context_t {
-	public:
-		size_t size;
-		int offset;
-		const char* data; 
-
-		file_context_t()
-			: size(0), offset(0), data(nullptr)
-		{
-
-		}
-
-		~file_context_t()
-		{
-
-		}
-};
-
-class http2_stream_data_t {
-	public:
-		uint32_t stream_id;
-		file_context_t file_ctx;
-		std::string request_path;
-
-		http2_stream_data_t(uint32_t stream_id = 0)
-			: stream_id(stream_id) {
-		}
-
-		~http2_stream_data_t() {
-		}
-};
-
-class http2_session_data_t {
-	public:
-		std::list<std::unique_ptr<http2_stream_data_t>> streams;
-		nghttp2_session* session; // shared_ptr 로 바꿔 보기
-		std::vector<uint8_t> output_buffer;
-		std::vector<uint8_t> input_buffer;
-		uint32_t events;
-		SessionState state;
-		SSL* ssl;
-
-	public:
-		http2_session_data_t()
-			: session(nullptr), events(0), state(SessionState::CONNECTING), ssl(nullptr) {
-		}
-
-		~http2_session_data_t() {
-			if (session) {
-				nghttp2_session_del(session);
-			}
-
-			if (ssl) {
-				SSL_shutdown(ssl);
-				SSL_free(ssl);
-			}
-		}
-
-		void append_to_output_buffer(const uint8_t* data, size_t length)
-		{
-			output_buffer.insert(output_buffer.end(), data, data + length);
-		}
-
-		void consume_output_buffer(size_t length)
-		{
-			output_buffer.erase(output_buffer.begin(), output_buffer.begin() + length);
-		}
-
-		void append_to_input_buffer(const uint8_t* data, size_t length)
-		{
-			input_buffer.insert(input_buffer.end(), data, data + length);
-		}
-
-		void consume_input_buffer(size_t length)
-		{
-			input_buffer.erase(input_buffer.begin(), input_buffer.begin() + length);
-		}
-};
 
 SSL_CTX* g_ssl_ctx;
 std::unordered_map<int, std::shared_ptr<http2_session_data_t>> session_map; // 나중에 shared_ptr로 바꿀 것
-std::unordered_map<std::string, std::shared_ptr<MappedFile>> file_cache;
 
 void update_event2(int epfd, int sock, uint32_t events)
 {
@@ -185,260 +92,6 @@ static void update_ssl_handshake_events(int epfd, int sock, std::shared_ptr<http
 	update_event(epfd, sock, events, session_data);
 }
 
-static nghttp2_ssize file_read_callback(nghttp2_session* session, int32_t stream_id,
-                                        uint8_t* buf, size_t length,
-                                        uint32_t* data_flags, nghttp2_data_source* source,
-                                        void* user_data)
-{
-	file_context_t* ctx = static_cast<file_context_t*>(source->ptr);
-	if (!ctx) {
-		return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
-	}
-
-	size_t remain_len = ctx->size - ctx->offset;
-	size_t copy_len = std::min(length, remain_len);
-
-	memcpy(buf, ctx->data + ctx->offset, copy_len);
-	ctx->offset += copy_len;
-
-	if (ctx->offset == ctx->size) {
-        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
-	}
-
-    return (nghttp2_ssize)copy_len;
-}
-
-static int send_response(nghttp2_session* session, int32_t stream_id,
-                         nghttp2_nv *nva, size_t nvlen, http2_stream_data_t* stream_data)
-{
-	nghttp2_data_provider2 data_prd;
-	data_prd.source.ptr = &stream_data->file_ctx;
-	data_prd.read_callback = file_read_callback;
-
-	int rv = nghttp2_submit_response2(session, stream_id, nva, nvlen, &data_prd);
-	if (rv != 0) {
-		std::cout << "Fatal error: " << nghttp2_strerror(rv) << std::endl;
-		return -1;
-	}
-
-	return 0;
-}
-
-static const char ERROR_HTML[] = "<html><head><title>404</title></head>"
-                                  "<body><h1>404 Not Found</h1></body></html>";
-static nghttp2_ssize error_read_callback(nghttp2_session* session, int32_t stream_id,
-                                        uint8_t* buf, size_t length,
-                                        uint32_t* data_flags, nghttp2_data_source* source,
-                                        void* user_data )
-{
-	size_t copy_len = std::min(length, strlen(ERROR_HTML));
-	memcpy(buf, ERROR_HTML, std::min(length, copy_len));
-	*data_flags |= NGHTTP2_DATA_FLAG_EOF;
-
-	return copy_len;
-}
-
-static int error_reply(nghttp2_session* session, http2_stream_data_t* stream_data)
-{
-    nghttp2_nv hdrs[] = {MAKE_NV(":status", "404")};
-	nghttp2_data_provider2 data_prd;
-	data_prd.read_callback = error_read_callback;
-
-	int rv = nghttp2_submit_response2(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), &data_prd);
-	if (rv != 0) {
-		std::cout << "Fatal error: " << nghttp2_strerror(rv) << std::endl;
-		return -1;
-	}
-
-    return 0;
-}
-
-
-static int on_request_recv(nghttp2_session* session, http2_session_data_t* session_data, http2_stream_data_t* stream_data)
-{
-	nghttp2_nv hdrs[] = {MAKE_NV(":status", "200")};
-	const char* rel_path = stream_data->request_path.c_str();
-	for (rel_path = stream_data->request_path.c_str(); *rel_path == '/'; rel_path++);
-
-	// 삽입 및 검색 실행
-	auto itr = file_cache.find(rel_path);
-	if (itr == file_cache.end()) {
-		try {
-			auto result = file_cache.emplace(rel_path, std::make_shared<MappedFile>(rel_path));
-			if (!result.second) {
-				std::cerr << "failed to emplace" << std::endl;
-				return 0;	
-			}
-
-			itr = result.first;
-
-		} catch (const std::bad_alloc& except) {
-			std::cerr << "failed to emplace" << except.what() << std::endl;
-			return 0;
-		}
-	}
-
-	if (itr->second->get_data()) {
-		stream_data->file_ctx.data = itr->second->get_data();
-		stream_data->file_ctx.size = itr->second->get_data_len();
-
-		if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), stream_data) < 0) {
-			return NGHTTP2_ERR_CALLBACK_FAILURE;
-		}
-	}
-
-	return 0;
-}
-
-static int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame *frame, void *user_data)
-{
-	http2_session_data_t* session_data = static_cast<http2_session_data_t*>(user_data);	
-	http2_stream_data_t* stream_data;
-
-	switch (frame->hd.type) {
-		case NGHTTP2_HEADERS:
-		case NGHTTP2_DATA:
-			if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) {
-				stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
-				if (!stream_data) {
-					return 0;
-				}
-				return on_request_recv(session, session_data, stream_data);
-			}
-			break;
-		case NGHTTP2_GOAWAY:
-			{
-				uint32_t last_stream_id = nghttp2_session_get_last_proc_stream_id(session);
-				nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, last_stream_id, NGHTTP2_NO_ERROR, nullptr, 0);
-				session_data->state = SessionState::DISCONNECTING;
-			}
-			break;
-		default:
-			break;
-	}
-
-	return 0;
-}
-
-static std::unique_ptr<http2_stream_data_t> create_http2_stream_data(http2_session_data_t* session_data, uint32_t stream_id)
-{
-	return std::make_unique<http2_stream_data_t>(stream_id);
-}
-
-static void delete_http2_stream_data(http2_session_data_t* session_data, http2_stream_data_t* stream_data)
-{
-	auto iter = std::find_if(session_data->streams.begin(), session_data->streams.end(),
-			[stream_data](const std::unique_ptr<http2_stream_data_t>& ptr) {
-				return ptr.get() == stream_data;
-			});
-
-	if (iter != session_data->streams.end()) {
-		session_data->streams.erase(iter);
-	}
-}
-
-static void add_stream_to_session(http2_session_data_t* session_data, std::unique_ptr<http2_stream_data_t> stream_data)
-{
-	uint32_t stream_id = stream_data->stream_id;
-
-	nghttp2_session_set_stream_user_data(session_data->session, stream_id, stream_data.get());
-	session_data->streams.push_back(std::move(stream_data));
-}
-
-static int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32_t error_code, void* user_data)
-{
-	http2_session_data_t* session_data = (http2_session_data_t*)user_data;
-	http2_stream_data_t* stream_data;
-	(void)error_code;
-
-	stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, stream_id));
-	if (!stream_data) {
-		return 0;
-	}
-
-	delete_http2_stream_data(session_data, stream_data);
-	return 0;
-}
-
-static int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
-							const uint8_t* name, size_t namelen,
-							const uint8_t *value, size_t valuelen,
-							uint8_t flags, void* user_data)
-{
-	http2_stream_data_t* stream_data;
-	const char PATH[] = ":path";
-
-	switch (frame->hd.type) {
-		case NGHTTP2_HEADERS:
-			if (frame->headers.cat != NGHTTP2_HCAT_REQUEST) {
-				break;
-			}
-
-			if (memcmp(PATH, name, namelen) == 0 && namelen == sizeof(PATH) - 1) {
-				stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
-				if (!stream_data) {
-					break;
-				}
-
-				stream_data->request_path = reinterpret_cast<const char*>(value);
-			}
-
-			// 헤더 출력
-	//		std::string name_str(reinterpret_cast<const char*>(name), namelen);
-	//		std::string value_str(reinterpret_cast<const char*>(value), valuelen);
-
-	//		std::cout << "name: " << name_str << std::endl;
-	//		std::cout << "value: " << value_str << std::endl;
-
-			break;
-	}
-
-	return 0;
-}
-
-static int on_begin_headers_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
-{
-	http2_session_data_t* session_data = (http2_session_data_t*)user_data;
-
-	if (frame->hd.type != NGHTTP2_HEADERS || frame->headers.cat != NGHTTP2_HCAT_REQUEST) {
-		return 0;
-	}
-
-	std::unique_ptr<http2_stream_data_t> stream_data = create_http2_stream_data(session_data, frame->hd.stream_id);
-	add_stream_to_session(session_data, std::move(stream_data));
-
-	return 0;
-}
-
-static int init_http2_session_data(std::shared_ptr<http2_session_data_t> session_data)
-{
-	nghttp2_session_callbacks *callbacks;
-	try {
-		if (nghttp2_session_callbacks_new(&callbacks) != 0) {
-			throw std::runtime_error("nghttp2_session_callbacks_new() error");
-		}
-
-		nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, on_frame_recv_callback); // 프레임 모두 도착 시 호출 (프레임 n개 도착 시, n번 호출)
-		nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, on_stream_close_callback); // 스트림 닫히려고 할 때 호출
-		nghttp2_session_callbacks_set_on_header_callback(callbacks, on_header_callback); // 헤더의 name-value 쌍 확인 및 저장
-		nghttp2_session_callbacks_set_on_begin_headers_callback(callbacks, on_begin_headers_callback); //HEADERS 또는 PUSH_PROMISE 프레임에서 헤더 블록 수신 시작 시 호출
-
-		if (nghttp2_session_server_new(&session_data->session, callbacks, session_data.get()) != 0) {
-			throw std::runtime_error("nghttp2_session_server_new() error");
-		}
-
-	} catch (const std::exception& ex) {
-		std::cerr << "exception: " << ex.what() << std::endl;
-		if (callbacks) {
-			nghttp2_session_callbacks_del(callbacks);
-		}
-
-		return -1;
-	}
-
-	nghttp2_session_callbacks_del(callbacks);
-	return 0;
-}
 
 static void disconnect_from_client(int epfd, int sock)
 {
@@ -712,11 +365,13 @@ void Server::handle_accept()
 	}
 }
 
-Server::Server() : epfd(-1), server_sock(-1), ep_events(nullptr) {
+Server::Server() : epfd(-1), server_sock(-1), ep_events(nullptr)
+{
 	memset(&addr , 0, sizeof(struct sockaddr_in));
 }
 
-Server::~Server() {
+Server::~Server()
+{
 	if (server_sock > 0) {
 		close(server_sock);
 	}
@@ -728,7 +383,8 @@ Server::~Server() {
 	}
 }
 
-void Server::setReuseSocket(int& server_sock) const {
+void Server::setReuseSocket(int& server_sock) const
+{
 	if (server_sock > 0) {
 		int opt = true;
 		if (setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, (void*)&opt, sizeof(opt)) < 0) {
@@ -737,12 +393,14 @@ void Server::setReuseSocket(int& server_sock) const {
 	}
 }
 
-void Server::setNonBlockingSocket(int& sock) const {
+void Server::setNonBlockingSocket(int& sock) const
+{
 	int flag = fcntl(sock, F_GETFL, 0);
 	fcntl(sock, F_SETFL, flag|O_NONBLOCK);
 }
 
-int Server::createListeningSocket(struct sockaddr_in& server_addr, uint16_t server_port) {
+int Server::createListeningSocket(struct sockaddr_in& server_addr, uint16_t server_port)
+{
 	int server_sock = socket(PF_INET, SOCK_STREAM, 0);
 	if (server_sock > 0) {
 		memset(&server_addr, 0, sizeof(struct sockaddr_in));
@@ -762,7 +420,8 @@ int Server::createListeningSocket(struct sockaddr_in& server_addr, uint16_t serv
 	return server_sock;
 }
 
-int Server::createEPOLL(int server_sock, size_t epoll_size) {
+int Server::createEPOLL(int server_sock, size_t epoll_size)
+{
 	int epfd = epoll_create(EPOLL_SIZE);
 	if (epfd <= 0) {
 		std::cout << "epoll_create() error: " << strerror(errno) << std::endl;
@@ -772,7 +431,8 @@ int Server::createEPOLL(int server_sock, size_t epoll_size) {
 	return epfd;
 }
 
-struct epoll_event* Server::createEventBucket(size_t size) {
+struct epoll_event* Server::createEventBucket(size_t size)
+{
 	struct epoll_event* ep_events = new struct epoll_event[EPOLL_SIZE];
 	if (!ep_events) {
 		std::cout << "allocation to ep_events error" << std::endl;
@@ -782,7 +442,8 @@ struct epoll_event* Server::createEventBucket(size_t size) {
 	return ep_events;
 }
 
-void Server::startUp(uint16_t port) {
+void Server::startUp(uint16_t port)
+{
 	try {
 		server_sock = createListeningSocket(addr, port);
 		if (listen(server_sock, 100)==-1) {
@@ -799,7 +460,8 @@ void Server::startUp(uint16_t port) {
 	}
 }
 
-void Server::listen_and_serve(const uint16_t port, const char* key_path, const char* crt_path) {
+void Server::listen_and_serve(const uint16_t port, const char* key_path, const char* crt_path)
+{
 	startUp(port);
 
     SSL_load_error_strings();
@@ -856,10 +518,8 @@ void Server::listen_and_serve(const uint16_t port, const char* key_path, const c
 	}
 
 	session_map.clear(); // 세션 맵 반납을 명시적으로 수행 (하지 않아도 됨)
-	file_cache.clear(); // 나중에 redis로 교체 또는 타임 아웃 기능 추가 할 것
 					
 	if (g_ssl_ctx) {
 		SSL_CTX_free(g_ssl_ctx);
 	}
 }
-
