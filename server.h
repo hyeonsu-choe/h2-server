@@ -4,10 +4,9 @@
 #include <vector>
 #include <memory>
 #include <string>
-//#include <queue>
 #include <chrono>
 #include <thread>
-//#include <condition_variable>
+#include <functional>
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -32,6 +31,13 @@ enum class IOResult {
 
 class Server : public Worker {
 	private:
+		std::function<bool(uint32_t)> check_rd_hup;
+		std::function<void(int, std::shared_ptr<http2_session_data_t>)> update_events;
+		std::function<IOResult(int, std::shared_ptr<http2_session_data_t>)> fill_input_buffer;
+		std::function<IOResult(int, std::shared_ptr<http2_session_data_t>)> flush_output_buffer;
+
+	private:
+		bool use_tls;
 		int epfd;
 		int server_sock;
 		struct sockaddr_in addr;
@@ -39,6 +45,8 @@ class Server : public Worker {
 		SSL_CTX* ssl_ctx;
 		std::unordered_map<int, std::shared_ptr<http2_session_data_t>> session_map;
 
+
+		void set_mode(bool use_tls);
 		void setReuseSocket(int& server_sock) const;
 		void setNonBlockingSocket(int& server_sock) const;
 		int createListeningSocket(struct sockaddr_in& server_addr, uint16_t server_port);
@@ -48,29 +56,35 @@ class Server : public Worker {
 
 		void set_event(int sock, uint32_t events);
 		void update_event(int sock, uint32_t events, std::shared_ptr<http2_session_data_t> session_data);
-		void update_events(int sock, std::shared_ptr<http2_session_data_t> session_data);
+		void update_events_h2c(int sock, std::shared_ptr<http2_session_data_t> session_data);
 		void disconnect_from_client(int sock);
 		void disconnect_from_client_if_done(int sock, std::shared_ptr<http2_session_data_t> session_data);
-
-		IOResult fill_input_buffer(int sock, std::shared_ptr<http2_session_data_t> session_data);
-		IOResult feed_input_buffer(std::shared_ptr<http2_session_data_t> session_data);
-		void handle_read(int sock, std::shared_ptr<http2_session_data_t> session_data);
-		void fill_output_buffer(std::shared_ptr<http2_session_data_t> session_data);
-		IOResult flush_output_buffer(int sock, std::shared_ptr<http2_session_data_t> session_data);
-		void handle_write(int sock, std::shared_ptr<http2_session_data_t> session_data);
 
 		int send_server_connection_header(std::shared_ptr<http2_session_data_t> session_data);
 		void handle_tls_handshake(int sock, std::shared_ptr<http2_session_data_t> session_data);
 		void handle_accept();
 
-		// ssl
+		void handle_read(int sock, std::shared_ptr<http2_session_data_t> session_data);
+		void handle_write(int sock, std::shared_ptr<http2_session_data_t> session_data);
+
+		// h2c
+		IOResult feed_input_buffer(std::shared_ptr<http2_session_data_t> session_data);
+		void fill_output_buffer(std::shared_ptr<http2_session_data_t> session_data);
+		IOResult fill_input_buffer_h2c(int sock, std::shared_ptr<http2_session_data_t> session_data);
+		IOResult flush_output_buffer_h2c(int sock, std::shared_ptr<http2_session_data_t> session_data);
+
+		// tls
+		void update_events_tls(int sock, std::shared_ptr<http2_session_data_t> session_data);
 		void update_ssl_handshake_events(int sock, std::shared_ptr<http2_session_data_t> session_data);
 		bool validate_alpn(std::shared_ptr<http2_session_data_t> session_data);
+		bool handle_tls_accept(int sock, std::shared_ptr<http2_session_data_t> session_data);
 		SessionState do_tls_handshake(int sock, std::shared_ptr<http2_session_data_t> session_data);
 		SessionState establish_connection(int sock, std::shared_ptr<http2_session_data_t> session_data);
+		IOResult fill_input_buffer_tls(int sock, std::shared_ptr<http2_session_data_t> session_data);
+		IOResult flush_output_buffer_tls(int sock, std::shared_ptr<http2_session_data_t> session_data);
 
 	public:
-		Server();
+		Server(bool);
 		~Server();
-		void listen_and_serve(const uint16_t port, const char* key_path, const char* crt_path);
+		void listen_and_serve(const uint16_t port, const std::string& key_path, const std::string& cert_path);
 };

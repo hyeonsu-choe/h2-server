@@ -6,6 +6,70 @@
 const int EPOLL_SIZE = 1024;
 const int BUF_SIZE = 2048;
 
+Server::Server(bool use_tls = true)
+	: epfd(-1), server_sock(-1), ep_events(nullptr),
+	check_rd_hup(nullptr), update_events(nullptr),
+	fill_input_buffer(nullptr), flush_output_buffer(nullptr),
+	ssl_ctx(nullptr), use_tls(use_tls)
+{
+	memset(&addr , 0, sizeof(struct sockaddr_in));
+	set_mode(use_tls);
+}
+
+Server::~Server()
+{
+	if (server_sock > 0) {
+		close(server_sock);
+	}
+
+	if (epfd > 0) {
+		close(epfd);
+	}
+
+	if (ep_events) {
+		delete []ep_events;
+	}
+
+	if (ssl_ctx) {
+		SSL_CTX_free(ssl_ctx);
+	}
+
+	session_map.clear(); // 세션 맵 반납을 명시적으로 수행 (하지 않아도 됨)
+}
+
+void Server::set_mode(bool use_tls)
+{
+	if (use_tls) {
+		check_rd_hup = [](uint32_t ev) {
+			return ev & EPOLLRDHUP;
+		};
+		update_events = [this](int sock, std::shared_ptr<http2_session_data_t> session_data) {
+			return this->update_events_tls(sock, session_data);
+		};
+		fill_input_buffer = [this](int sock, std::shared_ptr<http2_session_data_t> session_data) {
+			return this->fill_input_buffer_tls(sock, session_data);
+		};
+		flush_output_buffer = [this](int sock, std::shared_ptr<http2_session_data_t> session_data) {
+			return this->flush_output_buffer_tls(sock, session_data);
+		};
+	} else {
+		check_rd_hup = [](uint32_t ev) {
+			return false;
+		};
+		update_events = [this](int sock, std::shared_ptr<http2_session_data_t> session_data) {
+			return this->update_events_h2c(sock, session_data);
+		};
+		fill_input_buffer = [this](int sock, std::shared_ptr<http2_session_data_t> session_data) {
+			return this->fill_input_buffer_h2c(sock, session_data);
+		};
+		flush_output_buffer = [this](int sock, std::shared_ptr<http2_session_data_t> session_data) {
+			return this->flush_output_buffer_h2c(sock, session_data);
+		};
+	}
+
+	this->use_tls = use_tls;
+}
+
 void Server::setReuseSocket(int& server_sock) const
 {
 	if (server_sock > 0) {
@@ -106,10 +170,28 @@ void Server::update_event(int sock, uint32_t events, std::shared_ptr<http2_sessi
 	set_event(sock, events);
 }
 
-void Server::update_events(int sock, std::shared_ptr<http2_session_data_t> session_data)
+void Server::update_events_h2c(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	uint32_t events = 0;
-	
+
+	if (nghttp2_session_want_read(session_data->session)) {
+		events |= EPOLLIN;
+	}
+
+	if (nghttp2_session_want_write(session_data->session) ||
+		!session_data->output_buffer.empty()) {
+		events |= EPOLLOUT;
+	}
+
+	if (!events) events = EPOLLIN; // default로 하지 않는 것은 EPOLLIN만 무조건 등록이 유지되어 부하가 생기는 것을 방지
+
+	update_event(sock, events, session_data);
+}
+
+void Server::update_events_tls(int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+	uint32_t events = 0;
+
 	if (SSL_want_read(session_data->ssl) ||
 		nghttp2_session_want_read(session_data->session)) {
 		events |= EPOLLIN;
@@ -163,7 +245,34 @@ void Server::disconnect_from_client_if_done(int sock, std::shared_ptr<http2_sess
 	}
 }
 
-IOResult Server::fill_input_buffer(int sock, std::shared_ptr<http2_session_data_t> session_data)
+IOResult Server::fill_input_buffer_h2c(int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+    unsigned char buffer[BUF_SIZE];
+
+    while (1) {
+        ssize_t read_len = read(sock, buffer, BUF_SIZE);
+        if (read_len == 0) {
+            return IOResult::CLOSED;
+        } else if (read_len < 0) {
+            if (errno == EINTR) { // 인터럽트 시그널로 인한 read 반환
+                continue;
+            }
+
+            if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
+                return IOResult::AGAIN;
+            }
+
+            std::cerr << "read() error: " << strerror(errno) << std::endl;
+            return IOResult::ERROR;
+        }
+
+        session_data->append_to_input_buffer(buffer, read_len);
+    }
+
+    return IOResult::SUCCESS;
+}
+
+IOResult Server::fill_input_buffer_tls(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	unsigned char buffer[BUF_SIZE];
 	SSL* ssl = session_data->ssl;
@@ -246,7 +355,26 @@ void Server::fill_output_buffer(std::shared_ptr<http2_session_data_t> session_da
 	}
 }
 
-IOResult Server::flush_output_buffer(int sock, std::shared_ptr<http2_session_data_t> session_data)
+IOResult Server::flush_output_buffer_h2c(int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+    while (!session_data->output_buffer.empty()) {
+        ssize_t written_len = write(sock, session_data->output_buffer.data(), session_data->output_buffer.size());
+        if (written_len < 0) {
+            if (errno == EINTR)
+                continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                return IOResult::AGAIN; // 현재 처리 할 데이터가 없으므로 다음 EPOLLOUT 때 처리
+
+            std::cerr << "write() error: " << strerror(errno) << std::endl;
+            return IOResult::ERROR;
+        }
+        session_data->consume_output_buffer(written_len);
+    }
+
+    return IOResult::SUCCESS;
+}
+
+IOResult Server::flush_output_buffer_tls(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	SSL* ssl = session_data->ssl;
 
@@ -366,6 +494,24 @@ void Server::handle_tls_handshake(int sock, std::shared_ptr<http2_session_data_t
 	update_events(sock, session_data);
 }
 
+bool Server::handle_tls_accept(int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+	SSL* ssl = SSL_new(ssl_ctx);
+	SSL_set_fd(ssl, sock);
+	session_data->ssl = ssl;
+
+	SessionState session_state = do_tls_handshake(sock, session_data);
+	if (session_state == SessionState::DISCONNECTING) {
+		disconnect_from_client(sock);
+		return false;
+	} else if (session_state == SessionState::TLS_HANDSHAKING) {
+		session_data->state = session_state;
+		return false;
+	}
+
+	return true;
+}
+
 void Server::handle_accept()
 {
 	struct sockaddr_in client_addr;
@@ -393,20 +539,13 @@ void Server::handle_accept()
 			}
 			session_map.emplace(clnt_sock, session_data);
 
-			SSL* ssl = SSL_new(ssl_ctx);
-			SSL_set_fd(ssl, clnt_sock);
-			session_data->ssl = ssl;
-
-			SessionState session_state = do_tls_handshake(clnt_sock, session_data);
-			if (session_state == SessionState::DISCONNECTING) {
-				disconnect_from_client(clnt_sock);
-				continue;
-			} else if (session_state == SessionState::TLS_HANDSHAKING) {
-				session_data->state = session_state;
-				continue;
+			if (use_tls) {
+				if (!handle_tls_accept(clnt_sock, session_data)) {
+					continue;
+				}
 			}
 
-			session_state = establish_connection(clnt_sock, session_data);
+			SessionState session_state = establish_connection(clnt_sock, session_data);
 			if (session_state == SessionState::DISCONNECTING) {
 				disconnect_from_client(clnt_sock);
 				continue;
@@ -418,43 +557,17 @@ void Server::handle_accept()
 	}
 }
 																			
-Server::Server() : epfd(-1), server_sock(-1), ep_events(nullptr), ssl_ctx(nullptr)
+void Server::listen_and_serve(const uint16_t port, const std::string& key_path, const std::string& cert_path)
 {
-	memset(&addr , 0, sizeof(struct sockaddr_in));
-}
-
-Server::~Server()
-{
-	if (server_sock > 0) {
-		close(server_sock);
-	}
-
-	if (epfd > 0) {
-		close(epfd);
-	}
-
-	if (ep_events) {
-		delete []ep_events;
-	}
-
-	if (ssl_ctx) {
-		SSL_CTX_free(ssl_ctx);
-	}
-
-	session_map.clear(); // 세션 맵 반납을 명시적으로 수행 (하지 않아도 됨)
-}
-
-void Server::listen_and_serve(const uint16_t port, const char* key_path, const char* crt_path)
-{
-	startUp(port);
-
-    SSL_load_error_strings();
-	OpenSSL_add_ssl_algorithms();
-
-	ssl_ctx = create_ssl_ctx(key_path, crt_path);
-
 	struct epoll_event event;
 
+	if (use_tls) {
+		SSL_load_error_strings();
+		OpenSSL_add_ssl_algorithms();
+		ssl_ctx = create_ssl_ctx(key_path, cert_path);
+	}
+
+	startUp(port);
 	while (!isShutdown()) {
 		uint32_t event_count = epoll_wait(epfd, ep_events, EPOLL_SIZE, -1);
 		if (event_count < 0) {
@@ -482,7 +595,7 @@ void Server::listen_and_serve(const uint16_t port, const char* key_path, const c
 						continue;
 					}
 
-					if (ev & EPOLLRDHUP) { // SSL_read로 확인이 어려운 FIN만 오는 경우 확인
+					if (check_rd_hup(ev)) { // SSL_read로 확인이 어려운 FIN만 오는 경우 EPOLLRDHUP 이벤트로 확인
 						disconnect_from_client(clnt_sock);
 						continue;
 					}

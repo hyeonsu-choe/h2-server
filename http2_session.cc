@@ -1,7 +1,7 @@
 #include "http2_session.h"
 #include "http2_callbacks.h"
 
-http2_stream_data_t::http2_stream_data_t(uint32_t stream_id = 0)
+http2_stream_data_t::http2_stream_data_t(uint32_t stream_id)
 	: stream_id(stream_id)
 {
 

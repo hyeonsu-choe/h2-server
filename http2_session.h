@@ -22,7 +22,7 @@ class http2_stream_data_t {
 		file_context_t file_ctx;
 		std::string request_path;
 
-		http2_stream_data_t(uint32_t stream_id);
+		http2_stream_data_t(uint32_t stream_id = 0);
 		~http2_stream_data_t();
 };
 

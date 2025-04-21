@@ -40,7 +40,7 @@ static int alpn_select_proto_cb(SSL *ssl,
 	return SSL_TLSEXT_ERR_NOACK;
 }
 
-SSL_CTX *create_ssl_ctx(const char *key_path, const char *cert_path)
+SSL_CTX *create_ssl_ctx(const std::string& key_path, const std::string& cert_path)
 {
 	SSL_CTX* ssl_ctx = SSL_CTX_new(TLS_server_method());
 	if (!ssl_ctx) {
@@ -68,12 +68,12 @@ SSL_CTX *create_ssl_ctx(const char *key_path, const char *cert_path)
 	EC_KEY_free(ecdh);
 #endif
 
-	if (SSL_CTX_use_PrivateKey_file(ssl_ctx, key_path, SSL_FILETYPE_PEM) != 1) {
+	if (SSL_CTX_use_PrivateKey_file(ssl_ctx, key_path.c_str(), SSL_FILETYPE_PEM) != 1) {
 		std::cerr << "SSL_CTX_use_PrivateKey_file() error: " << ERR_error_string(ERR_get_error(), NULL) << std::endl;
 		return nullptr;
 	}
 
-	if (SSL_CTX_use_certificate_chain_file(ssl_ctx, cert_path)!= 1) {
+	if (SSL_CTX_use_certificate_chain_file(ssl_ctx, cert_path.c_str())!= 1) {
 		std::cerr << "SSL_CTX_use_certificate_chain_file() error: " << ERR_error_string(ERR_get_error(), NULL) << std::endl;
 		return nullptr;
 	}
