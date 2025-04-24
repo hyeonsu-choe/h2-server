@@ -25,8 +25,8 @@
 enum class IOResult {
 	SUCCESS,
 	AGAIN,
-	CLOSED,
-	ERROR
+	SHUTDOWN,
+//	ERROR
 };
 
 class Server : public Worker {
@@ -57,15 +57,17 @@ class Server : public Worker {
 		void set_event(int sock, uint32_t events);
 		void update_event(int sock, uint32_t events, std::shared_ptr<http2_session_data_t> session_data);
 		void update_events_h2c(int sock, std::shared_ptr<http2_session_data_t> session_data);
+		bool should_disconnect(SessionState session_state);
 		void disconnect_from_client(int sock);
-		void disconnect_from_client_if_done(int sock, std::shared_ptr<http2_session_data_t> session_data);
+//		bool disconnect_from_client_if_done(int sock, std::shared_ptr<http2_session_data_t> session_data);
 
 		int send_server_connection_header(std::shared_ptr<http2_session_data_t> session_data);
 		void handle_tls_handshake(int sock, std::shared_ptr<http2_session_data_t> session_data);
 		void handle_accept();
 
-		void handle_read(int sock, std::shared_ptr<http2_session_data_t> session_data);
-		void handle_write(int sock, std::shared_ptr<http2_session_data_t> session_data);
+		void handle_events(uint32_t ev, int sock, std::shared_ptr<http2_session_data_t> session_data);
+		IOResult handle_read(int sock, std::shared_ptr<http2_session_data_t> session_data);
+		IOResult handle_write(int sock, std::shared_ptr<http2_session_data_t> session_data);
 
 		// h2c
 		IOResult feed_input_buffer(std::shared_ptr<http2_session_data_t> session_data);

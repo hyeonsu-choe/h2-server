@@ -195,8 +195,7 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
 			if (frame->headers.cat != NGHTTP2_HCAT_REQUEST) {
 				break;
 			}
-
-			if (memcmp(PATH, name, namelen) == 0 && namelen == sizeof(PATH) - 1) {
+			if (namelen == sizeof(PATH) - 1 && memcmp(PATH, name, namelen) == 0) {
 				stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
 				if (!stream_data) {
 					break;

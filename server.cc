@@ -227,6 +227,11 @@ void Server::update_ssl_handshake_events(int sock, std::shared_ptr<http2_session
 	update_event(sock, events, session_data);
 }
 
+bool Server::should_disconnect(SessionState state)
+{
+	return state == SessionState::DISCONNECTING;
+}
+
 
 void Server::disconnect_from_client(int sock)
 {
@@ -234,16 +239,20 @@ void Server::disconnect_from_client(int sock)
 	close(sock);
 	session_map.erase(sock);
 }
-
-void Server::disconnect_from_client_if_done(int sock, std::shared_ptr<http2_session_data_t> session_data)
+/*
+bool Server::disconnect_from_client_if_done(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	if (session_data->state == SessionState::DISCONNECTING &&
 		!nghttp2_session_want_read(session_data->session) &&
 		!nghttp2_session_want_write(session_data->session) &&
 		session_data->output_buffer.empty()) {
-		disconnect_from_client(sock);
+		//disconnect_from_client(sock);
+		return false;
 	}
+
+	return I;
 }
+*/
 
 IOResult Server::fill_input_buffer_h2c(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
@@ -252,18 +261,15 @@ IOResult Server::fill_input_buffer_h2c(int sock, std::shared_ptr<http2_session_d
     while (1) {
         ssize_t read_len = read(sock, buffer, BUF_SIZE);
         if (read_len == 0) {
-            return IOResult::CLOSED;
+            return IOResult::SHUTDOWN;
         } else if (read_len < 0) {
-            if (errno == EINTR) { // 인터럽트 시그널로 인한 read 반환
-                continue;
-            }
-
-            if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
-                return IOResult::AGAIN;
-            }
-
+            if (errno == EINTR) {
+				continue;
+			} else if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
+				return IOResult::AGAIN;
+			}
             std::cerr << "read() error: " << strerror(errno) << std::endl;
-            return IOResult::ERROR;
+            return IOResult::SHUTDOWN;
         }
 
         session_data->append_to_input_buffer(buffer, read_len);
@@ -288,13 +294,15 @@ IOResult Server::fill_input_buffer_tls(int sock, std::shared_ptr<http2_session_d
 				case SSL_ERROR_SYSCALL:
 					if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
 						return IOResult::AGAIN;
+					} else if (errno == EINTR) {
+						continue;
 					} 
-					return IOResult::ERROR;
+					return IOResult::SHUTDOWN;
 				case SSL_ERROR_ZERO_RETURN:
-					return IOResult::CLOSED;
+					return IOResult::SHUTDOWN;
 				default:
 					std::cerr << "SSL_read() error: " << strerror(errno) << std::endl;
-					return IOResult::ERROR;
+					return IOResult::SHUTDOWN;
 			}
 		}
 
@@ -316,7 +324,7 @@ IOResult Server::feed_input_buffer(std::shared_ptr<http2_session_data_t> session
 				session_data->input_buffer.size());
 		if (fed_len < 0) {
 			std::cerr << "nghttp2_session_mem_recv2() error: " << nghttp2_strerror((int)fed_len) << std::endl;
-			return IOResult::ERROR;
+			return IOResult::SHUTDOWN;
 		}
 
 		session_data->consume_input_buffer(fed_len);
@@ -325,22 +333,27 @@ IOResult Server::feed_input_buffer(std::shared_ptr<http2_session_data_t> session
 	return IOResult::SUCCESS;
 }
 
-void Server::handle_read(int sock, std::shared_ptr<http2_session_data_t> session_data)
+IOResult Server::handle_read(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	IOResult input_result = fill_input_buffer(sock, session_data);
-	if (input_result == IOResult::CLOSED || input_result == IOResult::ERROR) {
-		disconnect_from_client(sock);
-		return;
+	if (input_result == IOResult::SHUTDOWN) {
+		return IOResult::SHUTDOWN;
 	}
 
 	IOResult feed_result = feed_input_buffer(session_data);
-	if (feed_result == IOResult::ERROR) {
-		disconnect_from_client(sock);
-		return;
+	if (feed_result == IOResult::SHUTDOWN) {
+		return IOResult::SHUTDOWN;
 	}
 
 	update_events(sock, session_data);
-	disconnect_from_client_if_done(sock, session_data);
+	if (session_data->state == SessionState::DISCONNECTING &&
+		!nghttp2_session_want_read(session_data->session) &&
+		!nghttp2_session_want_write(session_data->session) &&
+		session_data->output_buffer.empty()) {
+		return IOResult::SHUTDOWN;
+	}
+
+	return IOResult::SUCCESS;
 }
 
 void Server::fill_output_buffer(std::shared_ptr<http2_session_data_t> session_data)
@@ -360,13 +373,14 @@ IOResult Server::flush_output_buffer_h2c(int sock, std::shared_ptr<http2_session
     while (!session_data->output_buffer.empty()) {
         ssize_t written_len = write(sock, session_data->output_buffer.data(), session_data->output_buffer.size());
         if (written_len < 0) {
-            if (errno == EINTR)
-                continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-                return IOResult::AGAIN; // 현재 처리 할 데이터가 없으므로 다음 EPOLLOUT 때 처리
-
+            if (errno == EINTR) {
+				continue;
+			}
+			else if (errno == EAGAIN || errno == EWOULDBLOCK) { // 현재 처리 할 데이터가 없으므로 다음 EPOLLOUT 때 처리
+				return IOResult::AGAIN;
+			}
             std::cerr << "write() error: " << strerror(errno) << std::endl;
-            return IOResult::ERROR;
+            return IOResult::SHUTDOWN; // ex: EPIPE
         }
         session_data->consume_output_buffer(written_len);
     }
@@ -389,11 +403,13 @@ IOResult Server::flush_output_buffer_tls(int sock, std::shared_ptr<http2_session
 				case SSL_ERROR_SYSCALL:
 					if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
 						return IOResult::AGAIN;
+					} else if (errno == EINTR) {
+						continue;
 					}
-					return IOResult::ERROR;
+					return IOResult::SHUTDOWN; // ex: EPIPE
 				default:
 					std::cerr << "SSL_write() error: " << strerror(errno) << std::endl;
-					return IOResult::ERROR;
+					return IOResult::SHUTDOWN;
 			}
 		}
 		session_data->consume_output_buffer(ret);
@@ -401,17 +417,23 @@ IOResult Server::flush_output_buffer_tls(int sock, std::shared_ptr<http2_session
 	return IOResult::SUCCESS;
 }
 
-void Server::handle_write(int sock, std::shared_ptr<http2_session_data_t> session_data)
+IOResult Server::handle_write(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	fill_output_buffer(session_data);
-	IOResult flush_result = flush_output_buffer(sock, session_data);
-	if (flush_result == IOResult::ERROR) {
-		disconnect_from_client(sock);
-		return;
+	IOResult result = flush_output_buffer(sock, session_data);
+	if (result == IOResult::SHUTDOWN) {
+		return IOResult::SHUTDOWN;
 	}
 
 	update_events(sock, session_data);
-	disconnect_from_client_if_done(sock, session_data);
+	if (session_data->state == SessionState::DISCONNECTING &&
+		!nghttp2_session_want_read(session_data->session) &&
+		!nghttp2_session_want_write(session_data->session) &&
+		session_data->output_buffer.empty()) {
+		return IOResult::SHUTDOWN;
+	}
+
+	return result;
 }
 
 bool Server::validate_alpn(std::shared_ptr<http2_session_data_t> session_data)
@@ -477,15 +499,19 @@ SessionState Server::establish_connection(int sock, std::shared_ptr<http2_sessio
 void Server::handle_tls_handshake(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	SessionState session_state = do_tls_handshake(sock, session_data);
-	if (session_state == SessionState::DISCONNECTING) {
+//	if (session_state == SessionState::DISCONNECTING) {
+	if (should_disconnect(session_state)) {
 		disconnect_from_client(sock);
 		return;
-	} else if (session_state == SessionState::TLS_HANDSHAKING) {
+	}
+
+	if (session_state == SessionState::TLS_HANDSHAKING) {
 		return;
 	}
 
 	session_state = establish_connection(sock, session_data);
-	if (session_state == SessionState::DISCONNECTING) {
+	//if (session_state == SessionState::DISCONNECTING) {
+	if (should_disconnect(session_state)) {
 		disconnect_from_client(sock);
 		return;
 	}
@@ -521,10 +547,10 @@ void Server::handle_accept()
 	while (true) {
 		clnt_sock = accept(server_sock, (struct sockaddr*)&client_addr, &client_addr_size);
 		if (clnt_sock < 0) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				//std::cerr << "accept() :  EWOULDBLOCK()" << std::endl;
-			} else {
-				std::cout << "accept() error : " << strerror(errno) << std::endl;
+			if (errno == EINTR) {
+				continue;
+			} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				//std::cout << "accept() error : " << strerror(errno) << std::endl;
 			}
 			break;
 		} else {
@@ -556,6 +582,31 @@ void Server::handle_accept()
 		}
 	}
 }
+
+void Server::handle_events(uint32_t ev, int sock, std::shared_ptr<http2_session_data_t> session_data)
+{
+	IOResult result = IOResult::SUCCESS;
+
+	// FIN 만 수신된 경우(SSL_read로 확인이 어려운 FIN만 오는 경우 EPOLLRDHUP 이벤트로 확인)
+	if (check_rd_hup(ev)) {
+		disconnect_from_client(sock);
+		return;
+	}
+
+	if (ev & EPOLLIN) {
+		result = handle_read(sock, session_data);
+	}
+
+	if (result == IOResult::SUCCESS) { // EPOLLIN, EPOLLOUT 이벤트 동시 발생 시 대비
+		if (ev & EPOLLOUT) {
+			result = handle_write(sock, session_data);
+		}
+	}
+
+	if (result == IOResult::SHUTDOWN) {
+		disconnect_from_client(sock);
+	}
+}
 																			
 void Server::listen_and_serve(const uint16_t port, const std::string& key_path, const std::string& cert_path)
 {
@@ -566,49 +617,39 @@ void Server::listen_and_serve(const uint16_t port, const std::string& key_path, 
 		OpenSSL_add_ssl_algorithms();
 		ssl_ctx = create_ssl_ctx(key_path, cert_path);
 	}
-
 	startUp(port);
 	while (!isShutdown()) {
-		uint32_t event_count = epoll_wait(epfd, ep_events, EPOLL_SIZE, -1);
+		int event_count = epoll_wait(epfd, ep_events, EPOLL_SIZE, -1);
 		if (event_count < 0) {
-			std::cout << "epoll_wait() error" << std::endl;
+			if (errno == EINTR) {
+				continue;
+			}
+			std::cerr << "epoll_wait() error" << strerror(errno) << std::endl;
 			break;
 		}
-
-		for (uint32_t i = 0; i < event_count; i++) {
+		for (int i = 0; i < event_count; i++) {
 			if (ep_events[i].data.fd == server_sock) {
 				handle_accept();
 			} else {
 				uint32_t ev = ep_events[i].events;
 				int clnt_sock = ep_events[i].data.fd;
-
 				auto iter = session_map.find(clnt_sock);
 				if (iter != session_map.end()) {
 					std::shared_ptr<http2_session_data_t> session_data = iter->second;
 					if (!iter->second) {
-						std::cout << "session_data doesn't exist" << std::endl;
+						std::cerr << "session_data has nullptr" << std::endl;
 						continue;
 					}
 
+					// TLS handshake 진행 중인 경우
 					if (session_data->state == SessionState::TLS_HANDSHAKING) {
 						handle_tls_handshake(clnt_sock, session_data);
 						continue;
 					}
 
-					if (check_rd_hup(ev)) { // SSL_read로 확인이 어려운 FIN만 오는 경우 EPOLLRDHUP 이벤트로 확인
-						disconnect_from_client(clnt_sock);
-						continue;
-					}
-
-					if (ev & EPOLLIN) {
-						handle_read(clnt_sock, session_data);
-					}
-
-					if (ev & EPOLLOUT) {
-						handle_write(clnt_sock, session_data);
-					}
+					handle_events(ev, clnt_sock, session_data);
 				} else {
-					std::cout << "session_data doesn't exist" << std::endl;
+					std::cerr << "session_data doesn't exist in session map" << std::endl;
 				}
 			}
 		}
