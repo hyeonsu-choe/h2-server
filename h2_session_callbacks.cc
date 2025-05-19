@@ -2,8 +2,8 @@
 #include <utility>
 #include <memory>
 
-#include "http2_callbacks.h"
-#include "http2_session.h"
+#include "h2_session.h"
+#include "h2_session_callbacks.h"
 
 #define ARRLEN(x) (sizeof(x) / sizeof(x[0]))
 
@@ -13,6 +13,8 @@
         NGHTTP2_NV_FLAG_NONE                                                   \
   }
 
+// nghttp2_seesion_mem_send2 호출 하여 프레임들을 큐에서 꺼내서 시리얼라이즈 할 때
+// data 프레임이 필요한 경우 이 함수가 호출되어 데이터를 채움 (nghttp2_submit_response2 호출 때 호출되는 것이 아님에 유의)
 static nghttp2_ssize file_read_callback(nghttp2_session* session, int32_t stream_id,
                                         uint8_t* buf, size_t length,
                                         uint32_t* data_flags, nghttp2_data_source* source,
@@ -32,7 +34,6 @@ static nghttp2_ssize file_read_callback(nghttp2_session* session, int32_t stream
 	if (ctx->offset == ctx->size) {
         *data_flags |= NGHTTP2_DATA_FLAG_EOF;
 	}
-
     return (nghttp2_ssize)copy_len;
 }
 
@@ -48,7 +49,6 @@ static int send_response(nghttp2_session* session, int32_t stream_id,
 		std::cout << "Fatal error: " << nghttp2_strerror(rv) << std::endl;
 		return -1;
 	}
-
 	return 0;
 }
 
@@ -62,7 +62,6 @@ static nghttp2_ssize error_read_callback(nghttp2_session* session, int32_t strea
 	size_t copy_len = std::min(length, strlen(ERROR_HTML));
 	memcpy(buf, ERROR_HTML, std::min(length, copy_len));
 	*data_flags |= NGHTTP2_DATA_FLAG_EOF;
-
 	return copy_len;
 }
 
@@ -77,66 +76,62 @@ static int error_reply(nghttp2_session* session, http2_stream_data_t* stream_dat
 		std::cout << "Fatal error: " << nghttp2_strerror(rv) << std::endl;
 		return -1;
 	}
-
     return 0;
 }
 
-
-static int on_request_recv(nghttp2_session* session, http2_session_data_t* session_data, http2_stream_data_t* stream_data)
+static int send_error_response(nghttp2_session* session, http2_stream_data_t* stream_data)
 {
-	nghttp2_nv hdrs[] = {MAKE_NV(":status", "200")};
-	const char* rel_path = stream_data->request_path.c_str();
-	for (rel_path = stream_data->request_path.c_str(); *rel_path == '/'; rel_path++);
-
-	// 검색 및 삽입 실행
-	std::shared_ptr<MappedFile> file = find_file_from_filecache(rel_path); 
-	if (!file) {
-		file = insert_file_into_filecache(rel_path);
-		if (!file) {
-			std::cerr << "failed to emplace" << std::endl;
-			return 0;	
-		}
+	if (error_reply(session, stream_data) != 0) {
+		return NGHTTP2_ERR_CALLBACK_FAILURE;
 	}
-
-	if (file->get_data()) {
-		stream_data->file_ctx.data = file->get_data();
-		stream_data->file_ctx.size = file->get_data_len();
-
-		if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), stream_data) < 0) {
-			return NGHTTP2_ERR_CALLBACK_FAILURE;
-		}
-	}
-	/*
-	auto itr = file_cache.find(rel_path);
-	if (itr == file_cache.end()) {
-		try {
-			auto result = file_cache.emplace(rel_path, std::make_shared<MappedFile>(rel_path));
-			if (!result.second) {
-				std::cerr << "failed to emplace" << std::endl;
-				return 0;	
-			}
-
-			itr = result.first;
-
-		} catch (const std::bad_alloc& except) {
-			std::cerr << "failed to emplace" << except.what() << std::endl;
-			return 0;
-		}
-	}
-
-	if (itr->second->get_data()) {
-		stream_data->file_ctx.data = itr->second->get_data();
-		stream_data->file_ctx.size = itr->second->get_data_len();
-
-		if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), stream_data) < 0) {
-			return NGHTTP2_ERR_CALLBACK_FAILURE;
-		}
-	}
-	*/
-
 	return 0;
 }
 
+static std::string extract_rel_path(const std::string& path)
+{
+	size_t pos = path.find_first_not_of('/');
+	if (pos == std::string::npos) {
+		return "";
+	}
+	return path.substr(pos);
+}
+
+static std::shared_ptr<MappedFile> load_file_from_filecache(const std::string& path)
+{
+	// 검색 및 삽입 실행
+	std::shared_ptr<MappedFile> file = find_file_from_filecache(path);
+	if (!file) {
+		file = insert_file_into_filecache(path);
+		if (!file || !file->get_data()) {
+			std::cerr << "failed to load file \"" << path << "\" from file cache" << std::endl;
+		}
+	}
+	return file;
+}
+
+static int on_request_recv(nghttp2_session* session, http2_session_data_t* session_data, http2_stream_data_t* stream_data)
+{
+	std::string rel_path = extract_rel_path(stream_data->request_path);
+	if (rel_path.empty()) {
+		return send_error_response(session, stream_data);
+	}
+
+	auto file = load_file_from_filecache(rel_path);
+	if (!file) {
+		return send_error_response(session, stream_data);
+	}
+
+	stream_data->file_ctx.data = file->get_data();
+	stream_data->file_ctx.size = file->get_data_len();
+
+	nghttp2_nv hdrs[] = {MAKE_NV(":status", "200")};
+	if (send_response(session, stream_data->stream_id, hdrs, ARRLEN(hdrs), stream_data) < 0) {
+		return NGHTTP2_ERR_CALLBACK_FAILURE;
+	}
+	return 0;
+}
+
+// nghttp2_session_mem_recv2 호출 시, 프레임이 모두 도착 되었다고 판정 될 경우 호출
 int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame *frame, void *user_data)
 {
 	http2_session_data_t* session_data = static_cast<http2_session_data_t*>(user_data);	
@@ -163,10 +158,10 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame *frame,
 		default:
 			break;
 	}
-
 	return 0;
 }
 
+// 스트림 닫히려고 할 때 호출
 int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32_t error_code, void* user_data)
 {
 	http2_session_data_t* session_data = (http2_session_data_t*)user_data;
@@ -182,6 +177,7 @@ int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32
 	return 0;
 }
 
+// on_begin_headers_callback 호출된 뒤 부터, 각 http 헤더, 필드 쌍 해석 때마다 호출
 int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
 							const uint8_t* name, size_t namelen,
 							const uint8_t *value, size_t valuelen,
@@ -195,7 +191,7 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
 			if (frame->headers.cat != NGHTTP2_HCAT_REQUEST) {
 				break;
 			}
-			if (namelen == sizeof(PATH) - 1 && memcmp(PATH, name, namelen) == 0) {
+			if ((namelen == sizeof(PATH) - 1) && (memcmp(PATH, name, namelen) == 0)) {
 				stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
 				if (!stream_data) {
 					break;
@@ -205,18 +201,17 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
 			}
 
 			// 헤더 출력
-	//		std::string name_str(reinterpret_cast<const char*>(name), namelen);
-	//		std::string value_str(reinterpret_cast<const char*>(value), valuelen);
-
-	//		std::cout << "name: " << name_str << std::endl;
-	//		std::cout << "value: " << value_str << std::endl;
-
+			//std::string name_str(reinterpret_cast<const char*>(name), namelen);
+			//std::string value_str(reinterpret_cast<const char*>(value), valuelen);
+			//std::cout << "name: " << name_str << std::endl;
+			//std::cout << "value: " << value_str << std::endl;
 			break;
 	}
-
 	return 0;
 }
 
+// nghttp2_session_mem_recv2 호출 시,
+// HEADERS 프레임 또는 또는 PUSH_PROMISE 프레임 내 헤더 블록(HPACK으로 인코딩 된) 수신이 시작될 때 호출
 int on_begin_headers_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data)
 {
 	http2_session_data_t* session_data = (http2_session_data_t*)user_data;
@@ -227,6 +222,5 @@ int on_begin_headers_callback(nghttp2_session* session, const nghttp2_frame* fra
 
 	std::unique_ptr<http2_stream_data_t> stream_data = create_http2_stream_data(session_data, frame->hd.stream_id);
 	add_stream_to_session(session_data, std::move(stream_data));
-
 	return 0;
 }

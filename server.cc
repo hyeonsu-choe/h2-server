@@ -103,7 +103,6 @@ int Server::createListeningSocket(struct sockaddr_in& server_addr, uint16_t serv
 			throw -1;
 		}
 	}
-
 	return server_sock;
 }
 
@@ -114,7 +113,6 @@ int Server::createEPOLL(int server_sock, size_t epoll_size)
 		std::cout << "epoll_create() error: " << strerror(errno) << std::endl;
 		throw -1;
 	}
-
 	return epfd;
 }
 
@@ -125,7 +123,6 @@ struct epoll_event* Server::createEventBucket(size_t size)
 		std::cout << "allocation to ep_events error" << std::endl;
 		throw -1;
 	}
-
 	return ep_events;
 }
 
@@ -232,27 +229,12 @@ bool Server::should_disconnect(SessionState state)
 	return state == SessionState::DISCONNECTING;
 }
 
-
 void Server::disconnect_from_client(int sock)
 {
 	epoll_ctl(epfd, EPOLL_CTL_DEL, sock, NULL);
 	close(sock);
 	session_map.erase(sock);
 }
-/*
-bool Server::disconnect_from_client_if_done(int sock, std::shared_ptr<http2_session_data_t> session_data)
-{
-	if (session_data->state == SessionState::DISCONNECTING &&
-		!nghttp2_session_want_read(session_data->session) &&
-		!nghttp2_session_want_write(session_data->session) &&
-		session_data->output_buffer.empty()) {
-		//disconnect_from_client(sock);
-		return false;
-	}
-
-	return I;
-}
-*/
 
 IOResult Server::fill_input_buffer_h2c(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
@@ -274,7 +256,6 @@ IOResult Server::fill_input_buffer_h2c(int sock, std::shared_ptr<http2_session_d
 
         session_data->append_to_input_buffer(buffer, read_len);
     }
-
     return IOResult::SUCCESS;
 }
 
@@ -311,7 +292,6 @@ IOResult Server::fill_input_buffer_tls(int sock, std::shared_ptr<http2_session_d
 			break;
 		}
 	}
-
 	return IOResult::SUCCESS;
 }
 
@@ -329,7 +309,6 @@ IOResult Server::feed_input_buffer(std::shared_ptr<http2_session_data_t> session
 
 		session_data->consume_input_buffer(fed_len);
 	}
-
 	return IOResult::SUCCESS;
 }
 
@@ -352,7 +331,6 @@ IOResult Server::handle_read(int sock, std::shared_ptr<http2_session_data_t> ses
 		session_data->output_buffer.empty()) {
 		return IOResult::SHUTDOWN;
 	}
-
 	return IOResult::SUCCESS;
 }
 
@@ -384,7 +362,6 @@ IOResult Server::flush_output_buffer_h2c(int sock, std::shared_ptr<http2_session
         }
         session_data->consume_output_buffer(written_len);
     }
-
     return IOResult::SUCCESS;
 }
 
@@ -432,7 +409,6 @@ IOResult Server::handle_write(int sock, std::shared_ptr<http2_session_data_t> se
 		session_data->output_buffer.empty()) {
 		return IOResult::SHUTDOWN;
 	}
-
 	return result;
 }
 
@@ -482,7 +458,6 @@ int Server::send_server_connection_header(std::shared_ptr<http2_session_data_t> 
 		std::cerr << "nghttp2_submit_settings() error: " << nghttp2_strerror(rv) << std::endl;
 		return -1;
 	}
-
 	return 0;
 }
 
@@ -492,14 +467,12 @@ SessionState Server::establish_connection(int sock, std::shared_ptr<http2_sessio
 		std::cerr << "send_server_connection() error" << std::endl;
 		return SessionState::DISCONNECTING;
 	}
-
 	return SessionState::ESTABLISHED;
 }
 
 void Server::handle_tls_handshake(int sock, std::shared_ptr<http2_session_data_t> session_data)
 {
 	SessionState session_state = do_tls_handshake(sock, session_data);
-//	if (session_state == SessionState::DISCONNECTING) {
 	if (should_disconnect(session_state)) {
 		disconnect_from_client(sock);
 		return;
@@ -510,7 +483,6 @@ void Server::handle_tls_handshake(int sock, std::shared_ptr<http2_session_data_t
 	}
 
 	session_state = establish_connection(sock, session_data);
-	//if (session_state == SessionState::DISCONNECTING) {
 	if (should_disconnect(session_state)) {
 		disconnect_from_client(sock);
 		return;
@@ -534,7 +506,6 @@ bool Server::handle_tls_accept(int sock, std::shared_ptr<http2_session_data_t> s
 		session_data->state = session_state;
 		return false;
 	}
-
 	return true;
 }
 
@@ -617,7 +588,9 @@ void Server::listen_and_serve(const uint16_t port, const std::string& key_path, 
 		OpenSSL_add_ssl_algorithms();
 		ssl_ctx = create_ssl_ctx(key_path, cert_path);
 	}
+
 	startUp(port);
+
 	while (!isShutdown()) {
 		int event_count = epoll_wait(epfd, ep_events, EPOLL_SIZE, -1);
 		if (event_count < 0) {
@@ -627,6 +600,7 @@ void Server::listen_and_serve(const uint16_t port, const std::string& key_path, 
 			std::cerr << "epoll_wait() error" << strerror(errno) << std::endl;
 			break;
 		}
+
 		for (int i = 0; i < event_count; i++) {
 			if (ep_events[i].data.fd == server_sock) {
 				handle_accept();

@@ -15,11 +15,9 @@ static int select_next_proto(const unsigned char** out, unsigned char *outlen,
 		if (memcmp(&in[i], key, keylen) == 0) {
 			*out = (unsigned char*)&in[i + 1];
 			*outlen = in[i];
-
 			return 0;
 		}
 	}
-
 	return -1;
 }
 
@@ -36,7 +34,6 @@ static int alpn_select_proto_cb(SSL *ssl,
 //	if (select_next_proto(out, outlen, in , inlen, alpn_proto_list + 3, 9) == 0) {
 //		return SSL_TLSEXT_ERR_OK;
 //	}
-
 	return SSL_TLSEXT_ERR_NOACK;
 }
 
@@ -79,7 +76,6 @@ SSL_CTX *create_ssl_ctx(const std::string& key_path, const std::string& cert_pat
 	}
 
 	SSL_CTX_set_alpn_select_cb(ssl_ctx, alpn_select_proto_cb, NULL);
-
 	return ssl_ctx;
 }
 
@@ -93,7 +89,6 @@ bool is_alpn_h2_selected(SSL* ssl)
     if (alpn == NULL || alpn_len != 2 || memcmp("h2", alpn, 2) != 0) {
 		return false;
 	}
-
 	return true;
 }
 

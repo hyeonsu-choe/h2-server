@@ -53,6 +53,5 @@ std::ostream& operator<<(std::ostream& os, const ConfigOption& config_opt)
 	os << "TLS: " << (config_opt.use_tls ? "on" : "off") << std::endl;
 	os << "Key: " << config_opt.key_path << std::endl;
 	os << "Cert: " << config_opt.cert_path << std::endl;
-
 	return os;
 }

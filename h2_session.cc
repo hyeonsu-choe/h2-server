@@ -1,5 +1,5 @@
-#include "http2_session.h"
-#include "http2_callbacks.h"
+#include "h2_session.h"
+#include "h2_session_callbacks.h"
 
 http2_stream_data_t::http2_stream_data_t(uint32_t stream_id)
 	: stream_id(stream_id)
@@ -76,6 +76,7 @@ void add_stream_to_session(http2_session_data_t* session_data, std::unique_ptr<h
 	session_data->streams.push_back(std::move(stream_data));
 }
 
+// nghttp2 세션 객체에 콜백 함수들 등록
 int init_http2_session_data(std::shared_ptr<http2_session_data_t> session_data)
 {
 	nghttp2_session_callbacks *callbacks;
@@ -87,7 +88,7 @@ int init_http2_session_data(std::shared_ptr<http2_session_data_t> session_data)
 		nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, on_frame_recv_callback); // 프레임 모두 도착 시 호출 (프레임 n개 도착 시, n번 호출)
 		nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, on_stream_close_callback); // 스트림 닫히려고 할 때 호출
 		nghttp2_session_callbacks_set_on_header_callback(callbacks, on_header_callback); // 헤더의 name-value 쌍 확인 및 저장
-		nghttp2_session_callbacks_set_on_begin_headers_callback(callbacks, on_begin_headers_callback); //HEADERS 또는 PUSH_PROMISE 프레임에서 헤더 블록 수신 시작 시 호출
+		nghttp2_session_callbacks_set_on_begin_headers_callback(callbacks, on_begin_headers_callback); //HEADERS 또는 PUSH_PROMISE 프레임에서 HPACK으로 인코딩된 헤더 블록 수신 시작 시 호출
 
 		if (nghttp2_session_server_new(&session_data->session, callbacks, session_data.get()) != 0) {
 			throw std::runtime_error("nghttp2_session_server_new() error");
@@ -98,10 +99,11 @@ int init_http2_session_data(std::shared_ptr<http2_session_data_t> session_data)
 		if (callbacks) {
 			nghttp2_session_callbacks_del(callbacks);
 		}
-
 		return -1;
 	}
 
+	// callbacks 내용을 nghttp2_session_server_new 함수 호출을 통해
+	// nghttp2 세션 객체에 복사하여 넘겨 필요가 없어졌으니, 메모리 누수 방지를 위해 반환
 	nghttp2_session_callbacks_del(callbacks);
 	return 0;
 }

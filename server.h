@@ -19,7 +19,7 @@
 #include <sys/epoll.h>
 
 #include "worker.h"
-#include "http2_session.h"
+#include "h2_session.h"
 
 
 enum class IOResult {

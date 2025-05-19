@@ -26,25 +26,21 @@ MappedFile::MappedFile(const char* path)
 	if (path != nullptr) {
 		int fd = open(path, O_RDONLY);
 		if (fd == -1) {
-			printf("open()\n");
-			//perror("open");
-			return;
+			throw std::runtime_error("open() error");
 		}
 
 		struct stat st;
 		if (fstat(fd, &st) == -1) {
-			perror("fstat");
 			close(fd);
-			return;
+			throw std::runtime_error("fstat() error");
 		}
 
 		data_len = st.st_size;
 
 		data = mmap(NULL, data_len, PROT_READ, MAP_PRIVATE, fd, 0);
 		if (data == MAP_FAILED) {
-			perror("mmap");
 			close(fd);
-			return;
+			throw std::runtime_error("mmap() failed");
 		}
 
 		//madvise(data, data_len, MADV_WILLNEED);
@@ -56,9 +52,8 @@ MappedFile::~MappedFile()
 {
 	if (data) {
 		if (munmap(data, data_len) == -1) {
-			perror("munmap");
+			std::cerr << "munmap" << std::endl;
 		}
-		//  std::cout << __func__ << std::endl;
 	}
 }
 
@@ -72,32 +67,29 @@ const size_t MappedFile::get_data_len() const
 	return data_len;
 }
 
-std::shared_ptr<MappedFile> find_file_from_filecache(const char* file_path)
+std::shared_ptr<MappedFile> find_file_from_filecache(const std::string& file_path)
 {
 	auto itr = file_cache.find(file_path);
 	if (itr == file_cache.end()) {
 		return nullptr;
 	}
-
 	return itr->second;
 }
 
-//std::pair<std::shared_ptr<MappedFile>, bool> insert_file_into_filecache(const char* file_path)
-std::shared_ptr<MappedFile> insert_file_into_filecache(const char* file_path)
+std::shared_ptr<MappedFile> insert_file_into_filecache(const std::string& file_path)
 {
-//	std::pair<std::shared_ptr<MappedFile>, bool> ret(nullptr, false);
 	try {
-		auto result = file_cache.emplace(file_path, std::make_shared<MappedFile>(file_path));
+		auto result = file_cache.emplace(file_path, std::make_shared<MappedFile>(file_path.c_str()));
 		if (!result.second) {
 			std::cerr << "failed to emplace" << std::endl;
 			return nullptr;	
 		}
-
-		//return std::pair<std::shared_ptr<MappedFile>, bool>(result.first->second, true);
 		return result.first->second;
-
 	} catch (const std::bad_alloc& except) {
-		std::cerr << "failed to emplace" << except.what() << std::endl;
+		std::cerr << "failed to alloc: " << except.what() << std::endl;
+		return nullptr;
+	} catch (const std::runtime_error& except) {
+		std::cerr << "failed to construct MappedFile: " << except.what() << std::endl;
 		return nullptr;
 	}
 }
