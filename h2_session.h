@@ -7,6 +7,8 @@
 #include <openssl/ssl.h>
 
 #include "file_cache.h"
+#include "router.h"
+
 
 enum class SessionState {
 	CONNECTING,
@@ -21,6 +23,7 @@ class http2_stream_data_t {
 		uint32_t stream_id;
 		file_context_t file_ctx;
 		std::string request_path;
+		METHOD method;
 
 		http2_stream_data_t(uint32_t stream_id = 0);
 		~http2_stream_data_t();
@@ -28,6 +31,7 @@ class http2_stream_data_t {
 
 class http2_session_data_t {
 	public:
+		const Router* router;
 		std::list<std::unique_ptr<http2_stream_data_t>> streams;
 		nghttp2_session* session; // shared_ptr 로 바꿔 보기
 		std::vector<uint8_t> output_buffer;

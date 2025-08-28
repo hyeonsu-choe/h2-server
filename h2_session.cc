@@ -13,7 +13,7 @@ http2_stream_data_t::~http2_stream_data_t()
 }
 
 http2_session_data_t::http2_session_data_t()
-	: session(nullptr), events(0), state(SessionState::CONNECTING), ssl(nullptr)
+	: router(nullptr), session(nullptr), events(0), state(SessionState::CONNECTING), ssl(nullptr)
 {
 
 }
@@ -79,7 +79,7 @@ void add_stream_to_session(http2_session_data_t* session_data, std::unique_ptr<h
 // nghttp2 세션 객체에 콜백 함수들 등록
 int init_http2_session_data(std::shared_ptr<http2_session_data_t> session_data)
 {
-	nghttp2_session_callbacks *callbacks;
+	nghttp2_session_callbacks *callbacks = nullptr;
 	try {
 		if (nghttp2_session_callbacks_new(&callbacks) != 0) {
 			throw std::runtime_error("nghttp2_session_callbacks_new() error");

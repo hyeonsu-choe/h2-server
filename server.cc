@@ -534,6 +534,7 @@ void Server::handle_accept()
 				close(clnt_sock);
 				continue;
 			}
+			session_data->router = &router;
 			session_map.emplace(clnt_sock, session_data);
 
 			if (use_tls) {
@@ -579,6 +580,11 @@ void Server::handle_events(uint32_t ev, int sock, std::shared_ptr<http2_session_
 	}
 }
 																			
+bool Server::add_handler(const METHOD method, const std::string uri, Handler handler)
+{
+	return router.add(method, uri, handler);
+}
+
 void Server::listen_and_serve(const uint16_t port, const std::string& key_path, const std::string& cert_path)
 {
 	struct epoll_event event;

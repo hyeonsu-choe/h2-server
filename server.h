@@ -31,6 +31,9 @@ enum class IOResult {
 
 class Server : public Worker {
 	private:
+		Router router;
+
+	private:
 		std::function<bool(uint32_t)> check_rd_hup;
 		std::function<void(int, std::shared_ptr<http2_session_data_t>)> update_events;
 		std::function<IOResult(int, std::shared_ptr<http2_session_data_t>)> fill_input_buffer;
@@ -88,5 +91,6 @@ class Server : public Worker {
 	public:
 		Server(bool);
 		~Server();
+		bool add_handler(const METHOD method, const std::string uri, Handler handler);
 		void listen_and_serve(const uint16_t port, const std::string& key_path, const std::string& cert_path);
 };
