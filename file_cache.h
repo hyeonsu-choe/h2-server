@@ -17,12 +17,16 @@ class MappedFile {
     public:
         void* data; // mmap 된 주소 저장
         size_t data_len;
+
     public:
-        MappedFile(const char* path);
+        MappedFile(const char* path = nullptr);
         ~MappedFile();
 
+		bool map(const char* path);
+		void unmap();
         const char*  get_data() const;
         const size_t get_data_len() const;
+		bool is_mapped() const;
 
         friend std::ostream& operator<<(std::ostream& os, const MappedFile& map_file)
         {

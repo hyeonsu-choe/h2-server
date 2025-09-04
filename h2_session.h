@@ -6,6 +6,7 @@
 #include <nghttp2/nghttp2.h>
 #include <openssl/ssl.h>
 
+#include "multipart_parser.h"
 #include "file_cache.h"
 #include "router.h"
 
@@ -21,9 +22,12 @@ enum class SessionState {
 class http2_stream_data_t {
 	public:
 		uint32_t stream_id;
-		file_context_t file_ctx;
-		std::string request_path;
 		METHOD method;
+		std::string request_path;
+		//std::string content_type;
+		file_context_t file_ctx;
+		std::unique_ptr<MultipartFormParser> mime_parser;
+		std::vector<uint8_t> upload_file_buffer;
 
 		http2_stream_data_t(uint32_t stream_id = 0);
 		~http2_stream_data_t();
@@ -49,6 +53,19 @@ class http2_session_data_t {
 		void append_to_input_buffer(const uint8_t* data, size_t length);
 		void consume_input_buffer(size_t length);
 };
+
+class request_t {
+	public:
+		nghttp2_session* session;
+		http2_session_data_t* session_data;
+		http2_stream_data_t* stream_data;
+		const std::string& rel_path;
+
+		void clear_upload_file_buffer();
+		request_t(nghttp2_session* session, http2_session_data_t* session_data, http2_stream_data_t* stream_data, const std::string& rel_path);
+		~request_t();
+};
+
 
 std::unique_ptr<http2_stream_data_t> create_http2_stream_data(http2_session_data_t* session_data, uint32_t stream_id);
 void delete_http2_stream_data(http2_session_data_t* session_data, http2_stream_data_t* stream_data);

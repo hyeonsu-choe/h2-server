@@ -12,6 +12,7 @@ int main(int argc, char** argv)
 
 
 	Server server(config_opt.use_tls);
-	server.add_handler(GET, "/files/{file_name}", download_handler);
+	server.add_handler(GET, "/files/{file_name}", downloader);
+	server.add_handler(POST, "/files", uploader);
 	server.listen_and_serve(config_opt.port, config_opt.key_path, config_opt.cert_path);
 }

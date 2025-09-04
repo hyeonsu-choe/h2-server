@@ -12,7 +12,6 @@ void Router::split_path_segments(std::vector<std::string>& segs, const std::stri
 			segs.push_back(seg);
 		}
 	}
-	
 }
 
 bool Router::add(const METHOD method, const std::string& uri, Handler handler)

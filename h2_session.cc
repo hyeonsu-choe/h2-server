@@ -50,6 +50,23 @@ void http2_session_data_t::consume_input_buffer(size_t length)
 	input_buffer.erase(input_buffer.begin(), input_buffer.begin() + length);
 }
 
+request_t::request_t(nghttp2_session* session, http2_session_data_t* session_data, http2_stream_data_t* stream_data, const std::string& rel_path)
+	: session(session), session_data(session_data), stream_data(stream_data), rel_path(rel_path)
+{
+
+}
+
+request_t::~request_t()
+{
+	clear_upload_file_buffer(); // 파일이 하나의 스트림 내에서 여러 DATA 프레임으로 나뉘어져 수신되는 경우를 위해, 다음 data 프레임의 chunk 데이터들을 처음 부터 읽기 위해 초기화 (메모리 공간 절약 목적)
+}
+
+void request_t::clear_upload_file_buffer()
+{
+	if (stream_data && not stream_data->upload_file_buffer.empty()) {
+		stream_data->upload_file_buffer.clear();
+	}
+}
 
 std::unique_ptr<http2_stream_data_t> create_http2_stream_data(http2_session_data_t* session_data, uint32_t stream_id)
 {
@@ -89,6 +106,7 @@ int init_http2_session_data(std::shared_ptr<http2_session_data_t> session_data)
 		nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, on_stream_close_callback); // 스트림 닫히려고 할 때 호출
 		nghttp2_session_callbacks_set_on_header_callback(callbacks, on_header_callback); // 헤더의 name-value 쌍 확인 및 저장
 		nghttp2_session_callbacks_set_on_begin_headers_callback(callbacks, on_begin_headers_callback); //HEADERS 또는 PUSH_PROMISE 프레임에서 HPACK으로 인코딩된 헤더 블록 수신 시작 시 호출
+		nghttp2_session_callbacks_set_on_data_chunk_recv_callback(callbacks, on_data_chunk_recv_callback);
 
 		if (nghttp2_session_server_new(&session_data->session, callbacks, session_data.get()) != 0) {
 			throw std::runtime_error("nghttp2_session_server_new() error");

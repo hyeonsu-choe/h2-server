@@ -23,16 +23,28 @@ file_context_t::~file_context_t()
 MappedFile::MappedFile(const char* path)
 	: data(nullptr), data_len(0)
 {
+	map(path);
+}
+
+MappedFile::~MappedFile()
+{
+	unmap();
+}
+
+bool MappedFile::map(const char* path)
+{
 	if (path != nullptr) {
 		int fd = open(path, O_RDONLY);
 		if (fd == -1) {
-			throw std::runtime_error("open() error");
+			std::cerr << "open() error" << std::endl;
+			return false;
 		}
 
 		struct stat st;
 		if (fstat(fd, &st) == -1) {
 			close(fd);
-			throw std::runtime_error("fstat() error");
+			std::cerr << "fstat() error" << std::endl;
+			return false;
 		}
 
 		data_len = st.st_size;
@@ -40,15 +52,18 @@ MappedFile::MappedFile(const char* path)
 		data = mmap(NULL, data_len, PROT_READ, MAP_PRIVATE, fd, 0);
 		if (data == MAP_FAILED) {
 			close(fd);
-			throw std::runtime_error("mmap() failed");
+			std::cerr << "mmap() error : MAP_FAILED" << std::endl;
+			return false;
 		}
 
-		//madvise(data, data_len, MADV_WILLNEED);
 		close(fd); // mmap 이후 fd는 더 이상 필요 없음
+		return true;
 	}
+
+	return false;
 }
 
-MappedFile::~MappedFile()
+void MappedFile::unmap()
 {
 	if (data) {
 		if (munmap(data, data_len) == -1) {
@@ -65,6 +80,11 @@ const char*  MappedFile::get_data() const
 const size_t MappedFile::get_data_len() const
 {
 	return data_len;
+}
+
+bool MappedFile::is_mapped() const
+{
+	return get_data() != nullptr;
 }
 
 std::shared_ptr<MappedFile> find_file_from_filecache(const std::string& file_path)

@@ -13,7 +13,8 @@ static int on_request_recv(nghttp2_session* session, http2_session_data_t* sessi
 	if (router) {
 		auto result = router->resolve(stream_data->method, stream_data->request_path);
 		if (result.handler) {
-			return (*result.handler)(session, session_data, stream_data, result.param);
+			request_t request(session, session_data, stream_data, result.param);
+			return (*result.handler)(request);
 		}
 
 		return send_error_response(session, stream_data);
@@ -26,7 +27,7 @@ static int on_request_recv(nghttp2_session* session, http2_session_data_t* sessi
 int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame *frame, void *user_data)
 {
 	http2_session_data_t* session_data = static_cast<http2_session_data_t*>(user_data);	
-	http2_stream_data_t* stream_data;
+	http2_stream_data_t* stream_data = nullptr;
 
 	switch (frame->hd.type) {
 		case NGHTTP2_HEADERS:
@@ -56,7 +57,7 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame *frame,
 int on_stream_close_callback(nghttp2_session* session, int32_t stream_id, uint32_t error_code, void* user_data)
 {
 	http2_session_data_t* session_data = (http2_session_data_t*)user_data;
-	http2_stream_data_t* stream_data;
+	http2_stream_data_t* stream_data = nullptr;
 	(void)error_code;
 
 	stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, stream_id));
@@ -75,22 +76,22 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
 							uint8_t flags, void* user_data)
 {
 	http2_stream_data_t* stream_data;
-	const char PATH[] = ":path";
-	const char METHOD[] = ":method";
+	const char path[] = ":path";
+	const char method[] = ":method";
+	const char content_type[] = "content-type";
 
 	switch (frame->hd.type) {
 		case NGHTTP2_HEADERS:
 			if (frame->headers.cat != NGHTTP2_HCAT_REQUEST) {
 				break;
 			}
-			if ((namelen == sizeof(PATH) - 1) && (memcmp(PATH, name, namelen) == 0)) {
+			if ((namelen == sizeof(path) - 1) && (memcmp(path, name, namelen) == 0)) {
 				stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
 				if (!stream_data) {
 					break;
 				}
-
 				stream_data->request_path.assign(reinterpret_cast<const char*>(value), valuelen);
-			} else if ((namelen == sizeof(METHOD) - 1) && (memcmp(METHOD, name, namelen) == 0)) {
+			} else if ((namelen == sizeof(method) - 1) && (memcmp(method, name, namelen) == 0)) {
 				stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
 				if (!stream_data) {
 					break;
@@ -98,8 +99,19 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
 		
 				if (valuelen == 3 && memcmp("GET", value, valuelen) == 0) {
 					stream_data->method = GET;
-				} else {
+				} else if (valuelen == 4 && memcmp("POST", value, valuelen) == 0) {
 					stream_data->method = POST;
+					stream_data->mime_parser = std::make_unique<MultipartFormParser>();
+				}
+			} else if ((namelen == sizeof(content_type) - 1) && (memcmp(content_type, name, namelen) == 0)) {
+				stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, frame->hd.stream_id));
+				if (!stream_data) {
+					break;
+				}
+				//stream_data->content_type.assign(reinterpret_cast<const char*>(value), valuelen);
+				if (stream_data->mime_parser) {
+					std::string content_type(reinterpret_cast<const char*>(value), valuelen);
+					stream_data->mime_parser->extract_boundary(content_type);
 				}
 			}
 
@@ -125,5 +137,29 @@ int on_begin_headers_callback(nghttp2_session* session, const nghttp2_frame* fra
 
 	std::unique_ptr<http2_stream_data_t> stream_data = create_http2_stream_data(session_data, frame->hd.stream_id);
 	add_stream_to_session(session_data, std::move(stream_data));
+	return 0;
+}
+
+// data 프레임의 body 부를 읽어들이는 동안 읽혀진 chunk 단위로 호출
+// on_frame_recv_callback은 data 프레임이 바디부 까지 모두 전송 완료 되면 1회 호출 됨
+int on_data_chunk_recv_callback(nghttp2_session* session, uint8_t flags, int32_t stream_id, const uint8_t* data, size_t len, void* user_data)
+{
+	http2_session_data_t* session_data = (http2_session_data_t*)user_data;
+	http2_stream_data_t* stream_data = nullptr;
+
+	stream_data = static_cast<http2_stream_data_t*>(nghttp2_session_get_stream_user_data(session, stream_id));
+	if (!stream_data) {
+		return 0;
+	}
+
+	if (len > 0) {
+		stream_data->upload_file_buffer.insert(stream_data->upload_file_buffer.end(), data, data + len);
+	}
+
+//	for (size_t i = 0; i < len; i++) {
+//		std::cout << *(data + i);
+//	}
+//	std::cout << std::endl;
+
 	return 0;
 }

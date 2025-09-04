@@ -8,11 +8,9 @@
 #include <unordered_map>
 #include <functional>
 
-struct nghttp2_session;
-class http2_session_data_t;
-class http2_stream_data_t;
+struct request_t;
 
-using Handler = std::function<int(nghttp2_session* session, http2_session_data_t* session_data, http2_stream_data_t* stream_data, const std::string& rel_path)>;
+using Handler = std::function<int(request_t&)>;
 
 enum METHOD : uint8_t {
 	GET,
@@ -22,7 +20,7 @@ enum METHOD : uint8_t {
 
 struct Resolved {
 	const Handler* handler;
-	std::string param;
+	std::string param; // uri 상 파라미터 값
 };
 
 class RouterNode {

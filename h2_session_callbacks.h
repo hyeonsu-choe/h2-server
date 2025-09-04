@@ -10,3 +10,4 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
 							const uint8_t *value, size_t valuelen,
 							uint8_t flags, void* user_data);
 int on_begin_headers_callback(nghttp2_session* session, const nghttp2_frame* frame, void* user_data);
+int on_data_chunk_recv_callback(nghttp2_session* session, uint8_t flags, int32_t stream_id, const uint8_t* data, size_t len, void* user_data);

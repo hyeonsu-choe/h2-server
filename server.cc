@@ -98,7 +98,7 @@ int Server::createListeningSocket(struct sockaddr_in& server_addr, uint16_t serv
 		setReuseSocket(server_sock);
 		setNonBlockingSocket(server_sock);
 
-		if (bind(server_sock, (struct sockaddr*)&addr, sizeof(struct sockaddr_in)) == -1) {
+		if (bind(server_sock, (struct sockaddr*)&server_addr, sizeof(struct sockaddr_in)) == -1) {
 			std::cout << "bind() error: " << strerror(errno) << std::endl;
 			throw -1;
 		}
@@ -240,7 +240,7 @@ IOResult Server::fill_input_buffer_h2c(int sock, std::shared_ptr<http2_session_d
 {
     unsigned char buffer[BUF_SIZE];
 
-    while (1) {
+    while (true) {
         ssize_t read_len = read(sock, buffer, BUF_SIZE);
         if (read_len == 0) {
             return IOResult::SHUTDOWN;
@@ -253,7 +253,6 @@ IOResult Server::fill_input_buffer_h2c(int sock, std::shared_ptr<http2_session_d
             std::cerr << "read() error: " << strerror(errno) << std::endl;
             return IOResult::SHUTDOWN;
         }
-
         session_data->append_to_input_buffer(buffer, read_len);
     }
     return IOResult::SUCCESS;
@@ -266,31 +265,27 @@ IOResult Server::fill_input_buffer_tls(int sock, std::shared_ptr<http2_session_d
 
 	while (true) {
 		int ret = SSL_read(ssl, buffer, BUF_SIZE);
-		if (ret < 0) {
+		if (ret <= 0) {
 			int err = SSL_get_error(ssl, ret);
 			switch (err) {
 				case SSL_ERROR_WANT_READ:
 				case SSL_ERROR_WANT_WRITE:
-					return IOResult::AGAIN;
+					return IOResult::AGAIN; // read 할 데이터가 더이상 없음
 				case SSL_ERROR_SYSCALL:
 					if (errno == EAGAIN || errno == EWOULDBLOCK) { // 소켓 버퍼에 더 이상 읽을 데이터가 없음(EOF가 아님)
 						return IOResult::AGAIN;
 					} else if (errno == EINTR) {
 						continue;
-					} 
+					}
 					return IOResult::SHUTDOWN;
-				case SSL_ERROR_ZERO_RETURN:
+				case SSL_ERROR_ZERO_RETURN: // ret 값이 0 일때 ZERO 값이 리턴 됨 : if문 비교를 덜 하기위해 여기서 한 번에 처리토록 함
 					return IOResult::SHUTDOWN;
 				default:
 					std::cerr << "SSL_read() error: " << strerror(errno) << std::endl;
 					return IOResult::SHUTDOWN;
 			}
 		}
-
 		session_data->append_to_input_buffer(buffer, ret);
-		if (ret < BUF_SIZE) {
-			break;
-		}
 	}
 	return IOResult::SUCCESS;
 }
@@ -306,7 +301,6 @@ IOResult Server::feed_input_buffer(std::shared_ptr<http2_session_data_t> session
 			std::cerr << "nghttp2_session_mem_recv2() error: " << nghttp2_strerror((int)fed_len) << std::endl;
 			return IOResult::SHUTDOWN;
 		}
-
 		session_data->consume_input_buffer(fed_len);
 	}
 	return IOResult::SUCCESS;
@@ -371,7 +365,7 @@ IOResult Server::flush_output_buffer_tls(int sock, std::shared_ptr<http2_session
 
 	while (!session_data->output_buffer.empty()) {
 		int ret = SSL_write(ssl, session_data->output_buffer.data(), session_data->output_buffer.size());
-		if (ret < 0) {
+		if (ret <= 0) {
 			int err = SSL_get_error(ssl, ret);
 			switch (err) {
 				case SSL_ERROR_WANT_READ:
@@ -384,6 +378,9 @@ IOResult Server::flush_output_buffer_tls(int sock, std::shared_ptr<http2_session
 						continue;
 					}
 					return IOResult::SHUTDOWN; // ex: EPIPE
+				case SSL_ERROR_ZERO_RETURN: { // ret 값이 0 일때 ZERO 값이 리턴 됨 : if문 비교를 덜 하기위해 여기서 한 번에 처리토록 함
+					return IOResult::SHUTDOWN;
+											}
 				default:
 					std::cerr << "SSL_write() error: " << strerror(errno) << std::endl;
 					return IOResult::SHUTDOWN;
