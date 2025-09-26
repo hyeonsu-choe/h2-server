@@ -2,7 +2,9 @@
 #include "config_opt.h"
 
 ConfigOption::ConfigOption(int argc, char** argv)
-	: use_tls(1), port(default_port), key_path(default_key_path), cert_path(default_cert_path)
+	: is_help_mode(false), use_tls(1), port(default_port),
+	key_path(default_key_path), cert_path(default_cert_path),
+	root_path(default_root_path)
 {
 	parse_command_line(argc, argv);
 }
@@ -13,6 +15,7 @@ void ConfigOption::parse_command_line(int argc, char** argv)
 		{"port", required_argument, 0, 'p'},
 		{"key", required_argument, 0, 'k'},
 		{"cert", required_argument, 0, 'c'},
+		{"root", required_argument, 0, 'r'},
 		{"h2c", no_argument, &use_tls, 0},
 		{"help", no_argument, 0, 'h'},
 		{0, 0, 0, 0}
@@ -35,14 +38,19 @@ void ConfigOption::parse_command_line(int argc, char** argv)
             case 'c':
                 cert_path = optarg;
                 break;
+            case 'r':
+                root_path = optarg;
+                break;
             case 'h':
+				is_help_mode = true;
             default:
-				std::cout << "Usage: " << argv[0] << " [options]\n"
-					<< "  -p, --port [PORT]       Port number (default: 443)\n"
-					<< "  -k, --key [KEY_PATH]    TLS private key path\n"
-					<< "  -c, --cert [CERT_PATH]  TLS certificate path\n"
-					<< "      --h2c               Use cleartext (disable TLS)\n"
-					<< "      --help              Show this message\n";
+				std::cout << "Usage: " << argv[0] << " [options]" << std::endl
+					<< "  -p, --port [PORT]       Port number (default: 443)" << std::endl
+					<< "  -k, --key [KEY_PATH]    TLS private key path" << std::endl
+					<< "  -c, --cert [CERT_PATH]  TLS certificate path" << std::endl
+					<< "  -r, --root [DIR]        Root directory (default: ./)" << std::endl
+					<< "      --h2c               Use cleartext (disable TLS)" << std::endl
+					<< "      --help              Show this message" << std::endl;
         }
     }
 }

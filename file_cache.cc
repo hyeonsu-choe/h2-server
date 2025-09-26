@@ -7,7 +7,7 @@
 
 #include "file_cache.h"
 
-static std::unordered_map<std::string, std::shared_ptr<MappedFile>> file_cache;
+static thread_local std::unordered_map<std::string, std::shared_ptr<MappedFile>> file_cache;
 
 file_context_t::file_context_t()
 	: size(0), offset(0), data(nullptr)

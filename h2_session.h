@@ -24,7 +24,6 @@ class http2_stream_data_t {
 		uint32_t stream_id;
 		METHOD method;
 		std::string request_path;
-		//std::string content_type;
 		file_context_t file_ctx;
 		std::unique_ptr<MultipartFormParser> mime_parser;
 		std::vector<uint8_t> upload_file_buffer;

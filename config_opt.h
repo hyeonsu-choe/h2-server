@@ -5,6 +5,7 @@
 
 constexpr const char* default_key_path = "./cert/server.key";
 constexpr const char* default_cert_path = "./cert/server.crt";
+constexpr const char* default_root_path = "./";
 constexpr uint16_t default_port = 443;
 
 class ConfigOption {
@@ -12,10 +13,12 @@ class ConfigOption {
 		void parse_command_line(int argc, char** argv);
 
 	public:
+		bool is_help_mode;
 		int use_tls;
 		uint16_t port;
 		std::string key_path;
 		std::string cert_path;
+		std::string root_path;
 
 		ConfigOption(int argc, char** argv);
 		~ConfigOption() = default;
