@@ -2,6 +2,10 @@
 
 #include "ssl_ctx.h"
 
+const unsigned char id_ctx[] = {
+	"h2_server"
+};
+
 const unsigned char alpn_proto_list[] = {
 	0x02, 'h', '2',
 	0x08, 'h', 't', 't', 'p', '/', '1', '.', '1'
@@ -75,6 +79,17 @@ SSL_CTX *create_ssl_ctx(const std::string& key_path, const std::string& cert_pat
 		return nullptr;
 	}
 
+#if 0 // Session Resumption : h2load 테스트 결과 성능 하락이 관측 되어서 주석 처리함
+	// Session Resumption TLS 1.3
+	SSL_CTX_set_num_tickets(ssl_ctx, 2); // 세션 티켓 발급 개수
+	SSL_CTX_set_timeout(ssl_ctx, 300); // SSL_CTX 객체가 아닌 세션 캐시에 있는 SSL_SESSION 객체들의 만료 시간 관리
+
+	// Session Resumption TLS 1.2
+	SSL_CTX_set_session_cache_mode(ssl_ctx, SSL_SESS_CACHE_SERVER); // TLS1.2의 세션 ID 재개 켜기
+	SSL_CTX_set_session_id_context(ssl_ctx, id_ctx, sizeof(id_ctx) - 1);
+#endif
+
+	// ALPN 설정 콜백 함수 등록
 	SSL_CTX_set_alpn_select_cb(ssl_ctx, alpn_select_proto_cb, NULL);
 	return ssl_ctx;
 }

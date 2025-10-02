@@ -429,6 +429,12 @@ SessionState Server::do_tls_handshake(int sock, std::shared_ptr<http2_session_da
 	int ret = SSL_accept(ssl);
 	if (ret > 0) {
 		if (validate_alpn(session_data)) {
+
+#if 0 // Session Resumption 동작 여부 확인을 위한 구간
+			int reused = SSL_session_reused(ssl);
+			const char* ver = SSL_get_version(ssl);
+			std::cout << "TLS ver: " << ver << ", session_reused=" << reused << std::endl;
+#endif
 			return SessionState::ESTABLISHING;
 		}
 		return SessionState::DISCONNECTING;
