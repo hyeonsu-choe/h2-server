@@ -75,7 +75,11 @@ void Server::setReuseSocket(int& server_sock) const
 	if (server_sock > 0) {
 		int opt = true;
 		if (setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, (void*)&opt, sizeof(opt)) < 0) {
-			std::cout << "setsockopt() error: " << strerror(errno) << std::endl;
+			std::cout << "setsockopt(REUSEADDR) error: " << strerror(errno) << std::endl;
+		}
+
+		if (setsockopt(server_sock, SOL_SOCKET, SO_REUSEPORT, (void*)&opt, sizeof(opt)) < 0) {
+			std::cout << "setsockopt(REUSEPORT) error: " << strerror(errno) << std::endl;
 		}
 	}
 }

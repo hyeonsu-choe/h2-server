@@ -15,6 +15,7 @@ class ConfigOption {
 		bool is_help_mode;
 		int use_tls;
 		uint16_t port;
+		uint8_t num_threads;
 		std::string key_path;
 		std::string cert_path;
 
