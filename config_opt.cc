@@ -57,8 +57,10 @@ std::ostream& operator<<(std::ostream& os, const ConfigOption& config_opt)
 {
 	os << "Port: " << config_opt.port << std::endl;
 	os << "TLS: " << (config_opt.use_tls ? "on" : "off") << std::endl;
-	os << "Key: " << config_opt.key_path << std::endl;
-	os << "Cert: " << config_opt.cert_path << std::endl;
+	if (config_opt.use_tls) {
+		os << "Key: " << config_opt.key_path << std::endl;
+		os << "Cert: " << config_opt.cert_path << std::endl;
+	}
 	os << "Threads: " << static_cast<int>(config_opt.num_threads) << std::endl;
 	return os;
 }

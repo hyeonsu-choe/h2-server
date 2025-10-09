@@ -3,14 +3,14 @@
 #include <iostream>
 #include <memory>
 
-class file_context_t {
+class FileContext {
 	public:
 		size_t size;
 		int offset;
 		const char* data; 
 
-		file_context_t();
-		~file_context_t();
+		FileContext();
+		~FileContext();
 };
 
 class MappedFile {

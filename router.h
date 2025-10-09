@@ -8,9 +8,9 @@
 #include <unordered_map>
 #include <functional>
 
-struct request_t;
+class Request;
 
-using Handler = std::function<int(request_t&)>;
+using Handler = std::function<int(Request&)>;
 
 enum METHOD : uint8_t {
 	GET,

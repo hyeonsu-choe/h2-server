@@ -1,5 +1,4 @@
 #include <iostream>
-
 #include "ssl_ctx.h"
 
 const unsigned char id_ctx[] = {

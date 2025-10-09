@@ -1,6 +1,5 @@
-#include "h2_handler.h"
-#include "common.h"
-
+#include "session.h"
+#include "handler.h"
 
 static std::shared_ptr<MappedFile> load_file_from_filecache(const std::string& path)
 {
@@ -23,29 +22,29 @@ static std::shared_ptr<MappedFile> load_file_from_filecache(const std::string& p
 	return file;
 }
 
-int downloader(request_t& request)
+int downloader(Request& request)
 {
-	http2_stream_data_t* stream_data = request.stream_data;
+	StreamData* stream_data = request.stream_data;
 	const std::string& rel_path = request.rel_path;
 
 	if (rel_path.empty()) {
-		return send_error_response(request);
+		return request.reply_404();
 	}
 
 	auto file = load_file_from_filecache(rel_path);
 	if (!file) {
-		return send_error_response(request);
+		return request.reply_404();
 	}
 
 	stream_data->file_ctx.data = file->get_data();
 	stream_data->file_ctx.size = file->get_data_len();
 
-	return send_ok_response_with_file(request);
+	return request.reply_ok_with_file();
 }
 
-int uploader(request_t& request)
+int uploader(Request& request)
 {
-	http2_stream_data_t* stream_data = request.stream_data;
+	StreamData* stream_data = request.stream_data;
 	const std::string& rel_path = request.rel_path;
 
 	if (stream_data->mime_parser) {
@@ -53,10 +52,10 @@ int uploader(request_t& request)
 		if (is_completed) {
 			auto file = load_file_from_filecache(stream_data->mime_parser->get_filename());
 			if (!file) {
-				return send_error_response(request);
+				return request.reply_404();
 			}
 		}
 	}
 
-	return send_ok_response(request);
+	return request.reply_ok();
 }
