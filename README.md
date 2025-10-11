@@ -1,60 +1,128 @@
 # H2 Server
 
-**h2server** is a lightweight HTTP/2 server developed from scratch using **`Modern C++`**, utilizing `epoll`, [`nghttp2`](https://nghttp2.org) and [OpenSSL](https://www.openssl.org/).  
-It supports secure TLS connections and is optimized for low-latency file serving, with optional `mmap`-based caching.  
-This project was originally inspired by a [websvr](https://github.com/Ursanius/websvr) I had previously built in Go.  
-I developed it as a personal portfolio project to reimplement core HTTP/2 server functionality entirely in Modern C++, with the goal of studying and benchmarking system-level technologies such as event-driven I/O, TLS integration, and the HTTP/2 protocol.
+**h2server** is a lightweight HTTP/2 server implemented in **`Modern C++`**.  
+It runs on Linux and utilize `epoll`, [`nghttp2`](https://nghttp2.org) and [OpenSSL](https://www.openssl.org/).  
+It supports optional TLS connections and delivers low-latency file services through `mmap`-based caching.  
+The project was inspired by a [websvr](https://github.com/Ursanius/websvr) I previously developed in Golang, and was built as a personal initiative to study and benchmark system-level technologies such as event-driven I/O, TLS handling, and the HTTP/2 protocol.
 
 
-## Features
+## 🚀 Features
 
 - **HTTP/2 Support** using [nghttp2](https://nghttp2.org)
 - **TLS 1.2/1.3 support** using [OpenSSL](https://www.openssl.org/)
-- Supports HTTP/2 Cleartext (h2c) mode via `--h2c` option
-- Event-driven I/O model via `epoll (edge triggered mode)`
+- Enable HTTP/2 Cleartext (h2c) with `--h2c` option
+- Event-driven I/O model via `epoll (edge-triggered mode)`
 - File caching using `mmap`
-- Benchmark-ready with `h2load` support
+- Supports user-defined handler for both `GET` and `POST` Method via `Router`
+- Supports uploading **multipart/from-data**
 
 
-## Tech Stack
+## 🛠 Tech Stack
 
 - OS: Linux(Ubuntu)
-- Language: C++11
+- Language: C++17
 - Networking: epoll, socket, non-blocking I/O 
 - Protocol: HTTP/2([nghttp2](https://nghttp2.org)), TLS([OpenSSL](https://www.openssl.org))
-- Performance: `mmap`, shared_ptr-based session management
+- Performance: multi-threaded session management, `mmap`-based file caching 
 
 
-## Build Instructions
+## ⚙️ Build Instructions
 ```bash
 git clone https://github.com/ursanius/h2server.git
 cd h2server
 make -j$(nproc)
 ```
 
-## Run in HTTPS mode
+  
+## 🖥 Usage
+### Synopsis
+```
+./h2server [OPTIONS]
+```
+
+### 📋 Options
+
+| Flag                  | Type / Default                                  | Description                                                   |
+| --------------------- | ----------------------------------------------- | ------------------------------------------------------------- |
+| `-p, --port <NUM>`    | integer / `443`                                | TCP port to listen on.                     |
+| `-k, --key <PATH>`        | path / `./cert/server.key`                         | Path to TLS private key (PEM). Not required if using `--h2c`. |
+| `-c, --cert <PATH>`       | path / `./cert/server.crt`                         | Path to TLS certificate (PEM). Not required if using `--h2c`. |
+| `-n, --threads <NUM>` | integer / `1` | Number of worker threads.                                     |
+| `--h2c`               |                               | Enable HTTP/2 cleartext mode (no TLS).                        |
+| `-h, --help`          |                                          | Show help and exit.                                           |
+
+### Run in H2 mode (HTTP/2 over TLS : https)
 ```bash
 ./h2server --port 443 --key ./cert/server.key --cert ./cert/server.crt
 ```
 
-## Run in h2c mode (HTTP/2 over cleartext)
+### Run in H2C mode (HTTP/2 over cleartext : http)
 ```bash
 ./h2server --port 8080 --h2c
 ```
 
-## Benchmark Results (via `h2load`)
+### Routing & Handlers (Registering Handlers)
 
-> **Benchmark Methodology**:  
+**Router**: The Router maps incoming HTTP/2 requests (method + path) to user-defined handlers.
+It cleanly separates I/O & protocol (nghttp2/OpenSSL/epoll) from application logic.
+
+- Supported methods (current): GET, POST (more methods planned)
+- Registration timing: Register routes only before server start (listen_and_serve).
+
+```cpp
+// Example: path parameter {file_name}
+server.add_handler(Method::GET,  "/files/{file_name}", downloader);
+server.add_handler(Method::POST, "/files",            uploader);
+```
+- Path parameter: `{file_name}` in `/files/{file_name}`.  
+- Matching priority:  
+  - exact > parameter > wildcard.
+
+### Handler Signature  
+
+Handlers use the form `int handler(Request& request)`.
+
+Example: File Downloader
+```cpp
+int downloader(Request& request)
+{
+    StreamData* stream_data = request.stream_data;
+    const std::string& rel_path = request.rel_path;
+
+    if (rel_path.empty()) {
+        return request.reply_404();
+    }
+
+    auto file = load_file_from_filecache(rel_path);
+    if (!file) {
+        return request.reply_404();
+    }
+
+    stream_data->file_ctx.data = file->get_data();
+    stream_data->file_ctx.size = file->get_data_len();
+
+    return request.reply_ok_with_file();
+}
+```
+Response Helpers
+- `reply_ok_with_file()` - send file body with `200 OK`
+- `reply_ok` - `200 OK` without body
+- `reply_404` - `404 Not Found`
+
+
+## 📊 Benchmark Results (via `h2load`)
+
+> 🧪 **Benchmark Methodology**:  
 > - Benchmarks were executed 5 times each and averaged.
 > - Latency percentiles were calculated from TSV logs exported by `h2load`.
 > - CPU and memory usage were captured using `pidstat` during the 60-seconds load duration.
 
-> **Key Findings**:
+> 📌 **Key Findings**:
 > - MMAP optimization reduced p99 latency by over 60% in both low and high concurrency settings.
 > - TLS introduces moderate overhead (~20-30ms at p99), but performance remained stable.
-> - Without MMAP, the server failed under high load due to file descriptor exhaustion.
+> - Without mmap-based caching, the server opened many files concurrently during response handling, increasing the number of simultaneously open File Descriptors and eventually hitting the process limit.
 
-### Benchmark Environment
+### 🌐 Benchmark Environment
 
 All benchmarks were conducted in a virtualized environment using VMware:
 > - **Host OS**: Windows 11 Pro (64-bit, 24H2)
@@ -65,31 +133,23 @@ All benchmarks were conducted in a virtualized environment using VMware:
 > - **Allocated Memory**: 8 GB
 > - **Disk**: Virtual disk backed by NVMe SSD
 > - **Network**: Host-only network via VMware virtual interface  
->   All benchmarking traffic was confined to the guest <-> host communication layer.  
+>   All benchmarking traffic was confined to the guest <-> guest communication layer.  
 >   External Internet was not used during tests.
 > - **Kernel Version**: 6.8.0
-> - **Compiler**: g++ 11.4.0 (C++20)
+> - **Compiler**: g++ 11.4.0 (C++17)
 > - **Benchmark Tools**: 
 >   - `h2load`: v1.60.0 
 >   - `pidstat`: v12.5.2
->   - `perf`: v6.8.12
 
 All benchmarks were performed using `h2load` from nghttp2:
 ```bash
 ./h2load -c<clients> -m<streams> --warm-up-time=5 -D 60 <web server addr>/index.html  
 ```
-_**Note**: `/index.html` size is 158 byte._
-### HTTP/2 Cleartext (h2c) Test Example
+⚠️ **Note**: `/index.html` size is 158 byte.
+
+### ▶️ Client-Side Test Command
 ```bash
-./h2load -c1000 -m100 --warm-up-time=5 -D 60  http://test.com:8080/index.html --no-tls-proto=h2c
-```
-### HTTPS (TLS) Test Example
-```bash
-./h2load -c1000 -m100 --warm-up-time=5 -D 60  https://test.com/index.html
-```
-### Full Test with Log Output Example
-```bash
-./h2load -c1000 -m100 --warm-up-time=5 -D 60  https://test.com/index.html --log-file=result.tsv
+./h2load -c1000 -m100 --warm-up-time=5 -D 60 https://test.com/index.html --log-file=result.tsv
 ```
 Latency percentiles (p99, p90, p50) were calculated  from the TSV file as follows:
 ```bash
@@ -104,107 +164,125 @@ total=$(cut -f3 result.tsv | wc -l); p50=$(echo "$total * 0.50" | bc | cut -d. -
 ```
 CPU and memory usage were measured on the server using the following perf command:
 ```bash
-perf record -p <pid> -g -- sleep 60
+pidstat -r -u -p <PID> 1 60
 ```
-<br>
-
-### Optimized Configuration (h2server only)
-
-### Scenario A: Normal Concurrency (c100, m10)
-| Configuration | Version / Commit | QPS        | Success Rate (%)       | p99 Latency (ms) | p90 Latency (ms) | p50 Latency (ms)  | CPU Usage (%) | Memory Usage (MB) |
-|---------------|-------------|------------|-----------|--------|-------|----------|----------------|--------------------|
-| without MMAP (h2c) | `9fb52ea`  | 122060.232 | 100% | 10.674 | 8.9248 | 8.0674 | 98.41 | 7.45 |
-| with MMAP (h2c) | `e3b3805`   | 224543.5 |100% | 3.7808 | 2.9148 | 2.4816 | 89.63 | 20.31 |
-| with MMAP + TLS | `e3b3805`   | 190543.634 | 100% | 6.327 | 4.626 | 3.074 | 92.73 | 15.85 |
-   
-   
-| ![table1_qps](./docs/table1_qps.png) | ![table1_p99](./docs/table1_p99.png) |
-|:------------------------------------:|:------------------------------------:|
-| **QPS (Throughput)**                 | **p99 Latency**                      |
-
-| ![table1_cpu](./docs/table1_cpu.png) | ![table1_mem](./docs/table1_mem.png) |
-|:------------------------------------:|:------------------------------------:|
-| **CPU Usage**                        | **Memory Usage**                     |
-
-- MMAP usage significantly reduced latency and improved throughput.
-- TLS added moderate overhead but maintained stable performance. 
-
-<br>
-
-### Scenario B: High Concurrency (c1000, m100)
-
-| Configuration | Version / Commit | QPS        | Success Rate (%)       | p99 Latency (ms) | p90 Latency (ms) | p50 Latency (ms)  | CPU Usage (%) | Memory Usage (MB) |
-|---------------|-------------|------------|-----------|--------|-------|----------|----------------|--------------------|
-| without MMAP | `9fb52ea`  | 108745.666 | 0.1% | 968.666 | 891.9512 | 740.1804 | 85.978 | 76.84 |
-| with MMAP | `e3b3805`   | 361051.334 |100% | 290.2608 | 276.253 | 270.2988 | 99.236 | 84.17 |
-| with MMAP + TLS | `e3b3805`   | 340922.308| 100% | 324.6172 | 290.5728 | 277.5948 | 99.892 | 125.94 |
 
 
-| ![table2_qps](./docs/table2_qps.png) | ![table2_p99](./docs/table2_p99.png) |
-|:------------------------------------:|:------------------------------------:|
-| **QPS (Throughput)**                 | **p99 Latency**                      |
+### 🏆 Server Performance Comparison
 
-| ![table2_cpu](./docs/table2_cpu.png) | ![table2_mem](./docs/table2_mem.png) |
-|:------------------------------------:|:------------------------------------:|
-| **CPU Usage**                        | **Memory Usage**                     |
-
-- File descriptor exhaustion occurred during file response generation when MMAP was not used.
-
-<br>
-
-### Comparative Benchmark (Reference Servers)
-
-### Scenario A: Normal Concurrency (c100, m10)
-| Server Configuration | Version / Commit | QPS        | Success Rate (%)       | p99 Latency (ms) | p90 Latency (ms) | p50 Latency (ms)  | CPU Usage (%) | Memory Usage (MB) |
-|---------------|-------------|------------|-----------|--------|-------|----------|----------------|--------------------|
-| h2server | `e3b3805` | 190543.634 | 100% | 6.327 | 4.626 | 3.074 | 92.728 | 15.85 |
-| libevent-server | nghttp2 1.60.0 | 151187.566 |100% | 9.213 | 7.1444 | 5.2616 | 97.472 | 15.83 |
-| nghttpd | nghttp2 1.60.0 | 174105.634 | 100% | 4.8704 | 3.262 | 2.7712 | 75.898 | 18.32 |
-
-
-| ![table3_qps](./docs/table3_qps.png) | ![table3_p99](./docs/table3_p99.png) |
-|:------------------------------------:|:------------------------------------:|
-| **QPS (Throughput)**                 | **p99 Latency**                      |
-
-| ![table3_cpu](./docs/table3_cpu.png) | ![table3_mem](./docs/table3_mem.png) |
-|:------------------------------------:|:------------------------------------:|
-| **CPU Usage**                        | **Memory Usage**                     |
-
-<br>  
-
-### Scenario B: High Concurrency (c1000, m100)
-| Server Configuration | Version / Commit | QPS | Success Rate (%) | p99 Latency (ms) | p90 Latency (ms) | p50 Latency (ms)  | CPU Usage (%) | Memory Usage (MB) |
+| Server | Version / Commit | QPS | Success Rate (%) | p99 Latency (ms) | p90 Latency (ms) | p50 Latency (ms)  | CPU Usage (%) | Memory Usage (MB) |
 |---------------|-------------|------------|-----------|--------|-------|----------|---------|----------|
-| h2server | `e3b3805` | 340922.308 | 100% | 324.6172 | 290.5728 | 277.5948 | 99.892 | 125.94 |
-| libevent-server | nghttp2 1.60.0 | 9704.562 |17.01% | 1897.7302 | 1785.6954 | 1722.412 | 72.792 | 89.06 |
-| nghttpd | nghttp2 1.60.0 | 368260.894 | 100% | 243.688 | 148.7488 | 137.2834 | 83.338 | 112.71 |
+| h2server | `d5412ab` | 217159.334 | 100% | 510.0868 | 484.559 | 458.1346 | 99.846 | 140.04 |
+| libevent-server | nghttp2 1.60.0 | 204798.998 |100% | 541.5324 | 507.1514 | 479.899 | 99.912 | 95.45 |
+| nghttpd | nghttp2 1.60.0 | 366110.576 | 100% | 293.5366 | 213.9618 | 147.3734 | 88.154 | 112.97 |
 
-
-| ![table4_qps](./docs/table4_qps.png) | ![table4_p99](./docs/table4_p99.png) |
+| ![table1_qps](./docs/h2_c1000_m100_3servers_qps.png) | ![table1_p99](./docs/h2_c1000_m100_3servers_p99.png) |
 |:------------------------------------:|:------------------------------------:|
-| **QPS (Throughput)**                 | **p99 Latency**                      |
+| **QPS (Throughput): Higher is better**                 | **p99 Latency: Lower is better**                      |
 
-| ![table4_cpu](./docs/table4_cpu.png) | ![table4_mem](./docs/table4_mem.png) |
+| ![table1_cpu](./docs/h2_c1000_m100_3servers_cpu.png) | ![table1_mem](./docs/h2_c1000_m100_3servers_mem.png) |
 |:------------------------------------:|:------------------------------------:|
 | **CPU Usage**                        | **Memory Usage**                     |
 
-- File descriptor exhaustion occurred during file response generation in libevent-server.
+⚠️ **Note**: For **libevent-server**, running `h2load` with `-c1000` and `-m100` hits resource limits during response handling when the default file descriptor limit (1024) is used, resulting in a failure rate below 20%, which prevents meaningful performance measurement. Therefore, for libevent-server we increased the file descriptor limit from the default 1,024 to 65,535 using `ulimit -n` before running the tests.
 
-<br>
+### 📈 Thread Scaling Performance
+> **Test Notes**
+> - **libevent-server**: Excluded from the comparison because it supports only a single thread.
+> - **nghttpd**: When running with `-n 8` (8 worker threads), the default file descriptor limit (1024) caused `h2load` to hang indefinitely. For this specific test, we raised the limit to **65,535** using `ulimit -n` to complete the benchmark.
+>
+> Unless otherwise noted, other tests used the default file descriptor limit.
 
-### Performance Summary
-In both normal and high-concurrency scenarios, `h2server` consistently demonstrated:
-- Over 2× higher throughput compared to libevent-based servers (QPS)
-- Lower p99 latency under identical load
-- Stable CPU and memory usage under TLS
-- No failure under high concurrent file downloads (unlike libevent-server)
+#### A. QPS
+| Threads | h2server | nghttpd |
+|:---------:|:----------:|:---------:|
+| **1** | 217159.334 | 366110.576 |
+| **2** | 389953.44 | 402464.334 |
+| **4** | 426597.082 | 399435.666 |
+| **8** | 423505.2 | 397154.602 |
+
+| ![table2_qps](./docs/h2_c1000_m100_qps_scaling.png) |
+|:------------------------------------:|
+| **QPS (Throughput): Higher is better** |
+
+#### B. p99 Latency
+| Threads | h2server | nghttpd |
+|:---------:|:----------:|:---------:|
+| **1** | 510.0868 | 293.5366 |
+| **2** | 295.7502 | 159.732 |
+| **4** | 153.9212 | 169.6138 |
+| **8** | 148.8116 | 176.494 |
+
+| ![table2_p99](./docs/h2_c1000_m100_p99_scaling.png) |
+|:------------------------------------:|
+| **p99 Latency: Lower is better** |
+
+#### C. CPU Usage
+| Threads | h2server | nghttpd |
+|:---------:|:----------:|:---------:|
+| **1** | 99.846 | 88.154 |
+| **2** | 186.524 | 107.372 |
+| **4** | 208.794 | 109 |
+| **8** | 210.396 | 121.392 |
+
+| ![table2_cpu](./docs/h2_c1000_m100_cpu_scaling.png) |
+|:------------------------------------:|
+| **CPU Usage** |
+
+#### D. Memory Usage
+| Threads | h2server | nghttpd |
+|:---------:|:----------:|:---------:|
+| **1** | 140.0394531 | 112.9652344 |
+| **2** | 139.2839844 | 113.3726563 |
+| **4** | 128.4552734 | 113.0642578 |
+| **8** | 128.0207031 | 112.834375 |
+
+| ![table2_mem](./docs/h2_c1000_m100_mem_scaling.png) |
+|:------------------------------------:|
+| **Memory Usage** |
 
 
-## License
+### ✅ Benchmark Summary
+1. Throughput (QPS)
+   - With a single thread, `nghttpd` achieves higher throughput (~366K vs ~217K).
+   - With 4–8 threads, `h2server` scales more effectively and outperforms `nghttpd`.
+     - h2server: ~426K QPS
+     - nghttpd: ~397–402K QPS
+
+    👉 Better scalability with h2server in multi-threaded environments.
+
+2. p99 Latency
+   - At 1–2 threads, `nghttpd` shows lower latency.
+   - As threads increase, `h2server` reduces latency more effectively and maintains lower p99 latency at 4–8 threads.
+
+    👉 h2server delivers more stable and lower tail latency under multi-threaded workloads.
+
+3. CPU Usage
+   - `h2server` utilizes CPU resources much more aggressively (e.g., 208% vs 109% at 4 threads).
+   - This reflects a design tradeoff: higher CPU usage in exchange for better throughput and latency.
+
+4. Memory Usage
+   - `nghttpd` consistently shows lower memory consumption across all tests.
+   - `h2server` consumes slightly more memory, but usage decreases as threads scale (from ~140MB at 1 thread to ~128MB at 8 threads).
+
+5. Overall Interpretation  
+   - h2server: Strong scalability with higher throughput and lower latency under multi-threaded conditions, at the cost of higher CPU utilization.
+   - nghttpd: More efficient in single-thread performance and memory usage, but limited scalability.
+
+   👉 In short: “nghttpd excels in single-thread efficiency, while h2server outperforms in multi-thread scalability and tail latency.”
+
+
+- **Notes & test constraints:**  
+  - **libevent-server** supports only a single thread and was excluded from scaling charts.  
+  - With **nghttpd `-n 8`**, the default file descriptor limit (**1024**) caused `h2load` to hang; raising it to **65,535** via `ulimit -n` was required to complete the benchmark.  
+  - Unless otherwise noted, other tests used the default file descriptor limit.
+
+
+## 📜 License
 This project is licensed under the [MIT License](./LICENSE)
 
 
-## Contact
+## 🧑‍💻 Contact
 - **Maintainer**: Hyeonsu Choi
-- **Email**: [ursanius@gmail.com](mailto:ursanius@gmail.com)
-- **GitHub**: [github.com/Ursanius](https://github.com/Ursanius) 
+- **Email**: [hyeonsu.choe@gmail.com](mailto:hyeonsu.choe@gmail.com)
+- **GitHub**: [github.com/hyeonsu-choe](https://github.com/hyeonsu-choe) 
