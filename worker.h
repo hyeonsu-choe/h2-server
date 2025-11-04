@@ -37,7 +37,7 @@ class Worker {
 		std::unordered_map<int, std::shared_ptr<SessionData>> session_map;
 
 	private:
-		void set_mode(bool use_tls);
+		void bind_callbacks_for_mode(bool use_tls);
 		int create_epoll(size_t epoll_size);
 		void set_event(int sock, uint32_t events);
 		void update_event(int sock, uint32_t events, std::shared_ptr<SessionData> session_data);
@@ -47,7 +47,7 @@ class Worker {
 
 		int send_server_connection_header(std::shared_ptr<SessionData> session_data);
 		void handle_tls_handshake(int sock, std::shared_ptr<SessionData> session_data);
-		void handle_accept();
+		void handle_new_connections();
 
 		void handle_events(uint32_t ev, int sock, std::shared_ptr<SessionData> session_data);
 		IOResult handle_read(int sock, std::shared_ptr<SessionData> session_data);

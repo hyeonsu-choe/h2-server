@@ -26,7 +26,7 @@ Worker::Worker(const Router* router, bool use_tls = true) :
 	ssl_ctx(nullptr),
 	check_rd_hup(nullptr), update_events(nullptr), fill_input_buffer(nullptr), flush_output_buffer(nullptr)
 {
-	set_mode(use_tls);
+	bind_callbacks_for_mode(use_tls);
 }
 
 Worker::Worker(Worker&& worker)
@@ -73,7 +73,7 @@ int Worker::create_epoll(size_t epoll_size)
 	return epfd;
 }
 
-void Worker::set_mode(bool use_tls)
+void Worker::bind_callbacks_for_mode(bool use_tls)
 {
 	if (use_tls) {
 		check_rd_hup = [](uint32_t ev) {
@@ -287,7 +287,7 @@ bool Worker::handle_tls_accept(int sock, std::shared_ptr<SessionData> session_da
 	return true;
 }
 
-void Worker::handle_accept()
+void Worker::handle_new_connections()
 {
 	while (true) {
 		int clnt_sock = dequeue_sock();
@@ -405,7 +405,6 @@ IOResult Worker::fill_input_buffer_h2c(int sock, std::shared_ptr<SessionData> se
         }
         session_data->append_to_input_buffer(buffer, read_len);
     }
-    return IOResult::SUCCESS;
 }
 
 IOResult Worker::fill_input_buffer_tls(int sock, std::shared_ptr<SessionData> session_data)
@@ -437,7 +436,6 @@ IOResult Worker::fill_input_buffer_tls(int sock, std::shared_ptr<SessionData> se
 		}
 		session_data->append_to_input_buffer(buffer, ret);
 	}
-	return IOResult::SUCCESS;
 }
 
 IOResult Worker::feed_input_buffer(std::shared_ptr<SessionData> session_data)
@@ -606,7 +604,7 @@ void Worker::run(const std::string& key_path, const std::string& cert_path)
 				uint64_t signal;
 				while(read(signal_fd, &signal, sizeof(signal)) == sizeof(signal));
 
-				handle_accept();
+				handle_new_connections();
 			} else {
 				uint32_t ev = events[i].events;
 				int clnt_sock = events[i].data.fd;
