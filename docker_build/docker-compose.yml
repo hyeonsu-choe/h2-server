@@ -1,0 +1,10 @@
+services:
+  h2_server:
+    image: h2-server
+    environment:
+      - RUN_MODE=h2
+      - PORT=443
+      - THREADS=1
+    ports:
+      - 0.0.0.0:443:443
+      - :::443:443

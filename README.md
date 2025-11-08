@@ -3,13 +3,13 @@
 **h2server** is a lightweight HTTP/2 server implemented in **`Modern C++`**.  
 It runs on Linux and utilize `epoll`, [`nghttp2`](https://nghttp2.org) and [OpenSSL](https://www.openssl.org/).  
 It supports optional TLS connections and delivers low-latency file services through `mmap`-based caching.  
-The project was inspired by a [websvr](https://github.com/Ursanius/websvr) I previously developed in Golang, and was built as a personal initiative to study and benchmark system-level technologies such as event-driven I/O, TLS handling, and the HTTP/2 protocol.
+The project was inspired by a [websvr](https://github.com/hyeonsu-choe/websvr) I previously developed in Golang, and was built as a personal initiative to study and benchmark system-level technologies such as event-driven I/O, TLS handling, and the HTTP/2 protocol.
 
 
 ## 🚀 Features
 
-- **HTTP/2 Support** using [nghttp2](https://nghttp2.org)
-- **TLS 1.2/1.3 support** using [OpenSSL](https://www.openssl.org/)
+- **HTTP/2 Support** using [nghttp2 v1.60.0](https://nghttp2.org)
+- **TLS 1.2/1.3 support** using [OpenSSL v3.0.2](https://www.openssl.org/)
 - Enable HTTP/2 Cleartext (h2c) with `--h2c` option
 - Event-driven I/O model via `epoll (edge-triggered mode)`
 - File caching using `mmap`
@@ -19,46 +19,108 @@ The project was inspired by a [websvr](https://github.com/Ursanius/websvr) I pre
 
 ## 🛠 Tech Stack
 
-- OS: Linux(Ubuntu)
+- OS: Linux(Ubuntu 22.04)
 - Language: C++17
 - Networking: epoll, socket, non-blocking I/O 
 - Protocol: HTTP/2([nghttp2](https://nghttp2.org)), TLS([OpenSSL](https://www.openssl.org))
 - Performance: multi-threaded session management, `mmap`-based file caching 
 
 
-## ⚙️ Build Instructions
+## ⚙️ Build
+
 ```bash
-git clone https://github.com/ursanius/h2server.git
+git clone https://github.com/hyeonsu-choe/h2server.git
 cd h2server
-make -j$(nproc)
+make -j -j$(nproc)
 ```
 
-  
-## 🖥 Usage
-### Synopsis
+> **Note**  
+> The commands above assume the project has a **Makefile at the repository root**.  
+> If your `Makefile` is located under `src/`, use:
+> ```bash
+> cd h2server/src
+> make -j$(nproc)
+> ```
+
+---
+
+## 🐳 Build with Docker
+
+```bash
+git clone https://github.com/hyeonsu-choe/h2server.git
+cd h2server
+docker build -t h2-server -f ./docker_build/Dockerfile .
 ```
+
+> **Note**  
+> Run `docker build` **from the project root** (the directory that contains both `docker_build/` and `src/`).
+
+---
+
+## 🖥 Usage
+
+### Synopsis
+```bash
 ./h2server [OPTIONS]
 ```
 
 ### 📋 Options
 
-| Flag                  | Type / Default                                  | Description                                                   |
-| --------------------- | ----------------------------------------------- | ------------------------------------------------------------- |
-| `-p, --port <NUM>`    | integer / `443`                                | TCP port to listen on.                     |
-| `-k, --key <PATH>`        | path / `./cert/server.key`                         | Path to TLS private key (PEM). Not required if using `--h2c`. |
-| `-c, --cert <PATH>`       | path / `./cert/server.crt`                         | Path to TLS certificate (PEM). Not required if using `--h2c`. |
-| `-n, --threads <NUM>` | integer / `1` | Number of worker threads.                                     |
-| `--h2c`               |                               | Enable HTTP/2 cleartext mode (no TLS).                        |
-| `-h, --help`          |                                          | Show help and exit.                                           |
+| Flag                  | Type / Default               | Description                                                       |
+|----------------------|------------------------------|-------------------------------------------------------------------|
+| `-p, --port <NUM>`   | integer / `443`              | TCP port to listen on.                                            |
+| `-k, --key <PATH>`   | path / `./cert/server.key`   | Path to TLS private key (PEM). Not required when using `--h2c`.   |
+| `-c, --cert <PATH>`  | path / `./cert/server.crt`   | Path to TLS certificate (PEM). Not required when using `--h2c`.   |
+| `-n, --threads <NUM>`| integer / `1`                | Number of worker threads.                                         |
+| `--h2c`              | flag                         | Enable HTTP/2 cleartext mode (no TLS).                            |
+| `-h, --help`         | flag                         | Show help and exit.                                               |
 
-### Run in H2 mode (HTTP/2 over TLS : https)
+### 🐳 Run
+
+### A) H2 over TLS, https
 ```bash
-./h2server --port 443 --key ./cert/server.key --cert ./cert/server.crt
+./h2server --port 443 --key ./cert/server.key --cert ./cert/server.crt --threads 4
 ```
 
-### Run in H2C mode (HTTP/2 over cleartext : http)
+### B) H2C over cleartext, http
 ```bash
-./h2server --port 8080 --h2c
+./h2server --port 8080 --h2c --threads 4
+```
+
+---
+
+## 🐳 Run with Docker
+
+### A) Direct run
+```bash
+# TLS example: expose 443
+docker run -d --name h2server -e RUN_MODE=h2 -e PORT=443 -e THREADS=4 -p 443:443  h2-server
+```
+
+```bash
+# H2C example: expose 8080
+docker run -d --name h2server-h2c -e RUN_MODE=h2c -e PORT=8080 -e THREADS=4   -p 8080:8080   h2-server
+```
+
+### B) Run with docker-compose
+`docker_build/docker-compose.yml` (example)
+```yaml
+services:
+  h2_server:
+    image: h2-server
+    environment:
+      - RUN_MODE=h2
+      - PORT=443
+      - THREADS=1
+    ports:
+      - 0.0.0.0:443:443
+      - :::443:443
+```
+
+Run:
+```bash
+cd docker_build
+docker-compose up -d
 ```
 
 ### Routing & Handlers (Registering Handlers)
