@@ -3,7 +3,9 @@
 **h2server** is a lightweight HTTP/2 server implemented in **`Modern C++`**.  
 It runs on Linux and utilize `epoll`, [`nghttp2`](https://nghttp2.org) and [OpenSSL](https://www.openssl.org/).  
 It supports optional TLS connections and delivers low-latency file services through `mmap`-based caching.  
-The project was inspired by a [websvr](https://github.com/hyeonsu-choe/websvr) I previously developed in Golang, and was built as a personal initiative to study and benchmark system-level technologies such as event-driven I/O, TLS handling, and the HTTP/2 protocol.
+The project was inspired by a [webserver](https://github.com/hyeonsu-choe/websvr) I previously developed in Golang, and was built as a personal initiative to study and benchmark system-level technologies such as event-driven I/O, TLS handling, and the HTTP/2 protocol.
+
+[View full documentation](https://hyeonsu-choe.github.io/posts/h2_server/)
 
 
 ## 🚀 Features
@@ -13,7 +15,7 @@ The project was inspired by a [websvr](https://github.com/hyeonsu-choe/websvr) I
 - Enable HTTP/2 Cleartext (h2c) with `--h2c` option
 - Event-driven I/O model via `epoll (edge-triggered mode)`
 - File caching using `mmap`
-- Supports user-defined handler for both `GET` and `POST` Method via `Router`
+- Supports registering user-defined handler for both `GET` and `POST` Method via `Router`
 - Supports uploading **multipart/from-data**
 
 
@@ -69,8 +71,8 @@ docker build -t h2-server -f ./docker_build/Dockerfile .
 | Flag                  | Type / Default               | Description                                                       |
 |----------------------|------------------------------|-------------------------------------------------------------------|
 | `-p, --port <NUM>`   | integer / `443`              | TCP port to listen on.                                            |
-| `-k, --key <PATH>`   | path / `./cert/server.key`   | Path to TLS private key (PEM). Not required when using `--h2c`.   |
-| `-c, --cert <PATH>`  | path / `./cert/server.crt`   | Path to TLS certificate (PEM). Not required when using `--h2c`.   |
+| `-k, --key <PATH>`   | path / `./cert/server.key`   | Path to TLS private key file. <br>Not required when using `--h2c`.   |
+| `-c, --cert <PATH>`  | path / `./cert/server.crt`   | Path to TLS certificate file.<br> Not required when using `--h2c`.   |
 | `-n, --threads <NUM>`| integer / `1`                | Number of worker threads.                                         |
 | `--h2c`              | flag                         | Enable HTTP/2 cleartext mode (no TLS).                            |
 | `-h, --help`         | flag                         | Show help and exit.                                               |
@@ -94,12 +96,12 @@ docker build -t h2-server -f ./docker_build/Dockerfile .
 ### A) Direct run
 ```bash
 # TLS example: expose 443
-docker run -d --name h2server -e RUN_MODE=h2 -e PORT=443 -e THREADS=4 -p 443:443  h2-server
+docker run -d --name h2server -e RUN_MODE=h2 -e PORT=443 -e THREADS=4 -p 443:443 h2-server
 ```
 
 ```bash
 # H2C example: expose 8080
-docker run -d --name h2server-h2c -e RUN_MODE=h2c -e PORT=8080 -e THREADS=4   -p 8080:8080   h2-server
+docker run -d --name h2server-h2c -e RUN_MODE=h2c -e PORT=8080 -e THREADS=4 -p 8080:8080 h2-server
 ```
 
 ### B) Run with docker-compose
@@ -125,11 +127,11 @@ docker-compose up -d
 
 ### Routing & Handlers (Registering Handlers)
 
-**Router**: The Router maps incoming HTTP/2 requests (method + path) to user-defined handlers.
-It cleanly separates I/O & protocol (nghttp2/OpenSSL/epoll) from application logic.
+**Router**: The Router maps incoming HTTP/2 requests (method + path) to user-defined handlers.  
+It cleanly separates I/O & protocol (nghttp2/OpenSSL/epoll) from application logic.  
 
-- Supported methods (current): GET, POST (more methods planned)
-- Registration timing: Register routes only before server start (listen_and_serve).
+- Supported methods: GET, POST
+- Registration timing: Register routes only before server start (before calling listen_and_serve).
 
 ```cpp
 // Example: path parameter {file_name}
@@ -176,7 +178,7 @@ Response Helpers
 
 > 🧪 **Benchmark Methodology**:  
 > - Benchmarks were executed 5 times each and averaged.
-> - Latency percentiles were calculated from TSV logs exported by `h2load`.
+> - Latency percentiles were calculated from TSV(Tab-Separated Values) logs exported by `h2load`.
 > - CPU and memory usage were captured using `pidstat` during the 60-seconds load duration.
 
 > 📌 **Key Findings**:
@@ -306,10 +308,10 @@ pidstat -r -u -p <PID> 1 60
 
 ### ✅ Benchmark Summary
 1. Throughput (QPS)
-   - With a single thread, `nghttpd` achieves higher throughput (~366K vs ~217K).
+   - With a single thread, `nghttpd` achieves higher throughput (217K vs 366K).
    - With 4–8 threads, `h2server` scales more effectively and outperforms `nghttpd`.
-     - h2server: ~426K QPS
-     - nghttpd: ~397–402K QPS
+     - h2server: 426K QPS
+     - nghttpd: 402K QPS
 
     👉 Better scalability with h2server in multi-threaded environments.
 
