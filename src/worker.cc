@@ -24,7 +24,8 @@ Worker::Worker(const Router* router, bool use_tls = true) :
 	use_tls(use_tls), router(router),
 	signal_fd(-1), epfd(-1),
 	ssl_ctx(nullptr),
-	check_rd_hup(nullptr), update_events(nullptr), fill_input_buffer(nullptr), flush_output_buffer(nullptr)
+	check_rd_hup(nullptr), update_events(nullptr), fill_input_buffer(nullptr), flush_output_buffer(nullptr),
+	socket_queue(4096)
 {
 	bind_callbacks_for_mode(use_tls);
 }
@@ -545,12 +546,17 @@ int Worker::dequeue_sock()
 	int clnt_sock = -1;
 
 	std::lock_guard<std::mutex> lock(m);
-	if (!socket_queue.empty()) {
+	if (!socket_queue.is_empty()) {
 		clnt_sock = socket_queue.front();
 		socket_queue.pop();
 	}
 
 	return clnt_sock;
+}
+
+bool Worker::is_full()
+{
+	return socket_queue.is_full();
 }
 
 bool Worker::startup()

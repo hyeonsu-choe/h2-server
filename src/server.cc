@@ -2,7 +2,8 @@
 
 
 Server::Server(bool use_tls = true)
-	: load_count(0), epfd(-1), server_sock(-1)
+	: workers(), load_balancer(workers),
+	epfd(-1), server_sock(-1)
 {
 	memset(&addr , 0, sizeof(struct sockaddr_in));
 }
@@ -116,8 +117,13 @@ void Server::handle_accept()
 		} else {
 			set_nonblocking_socket(clnt_sock);
 			//std::cout << "client[" << clnt_sock << "] connected ..." << std::endl;
-			auto& worker = workers[load_count++ % workers.size()];
-			worker.enqueue_sock(clnt_sock);
+			int worker_index = load_balancer.acquire_worker_index(clnt_sock);
+			if (worker_index < 0) {
+				std::cerr << "enqueing failure : all worker is full" << std::endl;
+				close(clnt_sock);
+				break; // 이미 worker 들이 여력이 없는 상태이므로 continue 하여 다른 후속 요청을 처리하지 않고 그냥 중단
+			}
+			workers[worker_index].enqueue_sock(clnt_sock);
 		}
 	}
 }
@@ -166,6 +172,7 @@ void Server::listen_and_serve(const uint8_t num_threads, const bool use_tls, con
 	}
 
 	startup(port);
+	load_balancer.reset(num_threads);
 	spawn_workers(num_threads, use_tls, key_path, cert_path);
 
 	while (true) {

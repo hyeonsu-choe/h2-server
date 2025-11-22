@@ -6,6 +6,7 @@
 #include <functional>
 
 #include "session.h"
+#include "circular_queue.h"
 
 struct ssl_ctx_st;
 using SSL_CTX = ssl_ctx_st;
@@ -33,7 +34,7 @@ class Worker {
 		bool use_tls;
 		SSL_CTX* ssl_ctx;
 
-		std::queue<int> socket_queue;
+		CircularQueue<int> socket_queue;
 		std::unordered_map<int, std::shared_ptr<SessionData>> session_map;
 
 	private:
@@ -78,8 +79,8 @@ class Worker {
 		Worker(const Worker&) = delete;
 		Worker& operator=(const Worker&) = delete;
 
-
 		void enqueue_sock(int sock);
 		int dequeue_sock();
+		bool is_full();
 		void run(const std::string& key_path, const std::string& cert_path);
 };
