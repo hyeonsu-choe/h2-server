@@ -17,6 +17,8 @@ The project was inspired by a [webserver](https://github.com/hyeonsu-choe/websvr
 - File caching using `mmap`
 - Supports registering user-defined handler for both `GET` and `POST` Method via `Router`
 - Supports uploading **multipart/from-data**
+- **Custom Load Balancer** using an **indirection table** for efficient multi-thread worker dispatch  
+- **Bounded CircularQueue** for overload-safe scheduling and predictable memory usage 
 
 
 ## 🛠 Tech Stack
@@ -236,9 +238,9 @@ pidstat -r -u -p <PID> 1 60
 
 | Server | Version / Commit | QPS | Success Rate (%) | p99 Latency (ms) | p90 Latency (ms) | p50 Latency (ms)  | CPU Usage (%) | Memory Usage (MB) |
 |---------------|-------------|------------|-----------|--------|-------|----------|---------|----------|
-| h2server | `d5412ab` | 217159.334 | 100% | 510.0868 | 484.559 | 458.1346 | 99.846 | 140.04 |
+| h2server | c34cd1d9ce | 205574.332| 100% | 547.7828 | 508.3812 | 486.7182 | 99.942 | 141.19  |
 | libevent-server | nghttp2 1.60.0 | 204798.998 |100% | 541.5324 | 507.1514 | 479.899 | 99.912 | 95.45 |
-| nghttpd | nghttp2 1.60.0 | 366110.576 | 100% | 293.5366 | 213.9618 | 147.3734 | 88.154 | 112.97 |
+| nghttpd | nghttp2 1.60.0 | 321848.43 | 100% | 235.788 | 166.4234 | 157.616 | 85.59 | 112.38 |
 
 | ![table1_qps](./docs/h2_c1000_m100_3servers_qps.png) | ![table1_p99](./docs/h2_c1000_m100_3servers_p99.png) |
 |:------------------------------------:|:------------------------------------:|
@@ -260,10 +262,10 @@ pidstat -r -u -p <PID> 1 60
 #### A. QPS
 | Threads | h2server | nghttpd |
 |:---------:|:----------:|:---------:|
-| **1** | 217159.334 | 366110.576 |
-| **2** | 389953.44 | 402464.334 |
-| **4** | 426597.082 | 399435.666 |
-| **8** | 423505.2 | 397154.602 |
+| **1** |205574.332 |	321848.43 |
+| **2** |393091.732 |	358788.664 |
+| **4** |403797.186 |	367662.9 |
+| **8** |404569.212 |	348835.566|
 
 | ![table2_qps](./docs/h2_c1000_m100_qps_scaling.png) |
 |:------------------------------------:|
@@ -272,10 +274,10 @@ pidstat -r -u -p <PID> 1 60
 #### B. p99 Latency
 | Threads | h2server | nghttpd |
 |:---------:|:----------:|:---------:|
-| **1** | 510.0868 | 293.5366 |
-| **2** | 295.7502 | 159.732 |
-| **4** | 153.9212 | 169.6138 |
-| **8** | 148.8116 | 176.494 |
+| **1** | 547.7828 |	235.788 |
+| **2** | 305.2898 |	188.0264|
+| **4** | 157.3542 |	177.935 |
+| **8** | 152.979	| 182.8562 |
 
 | ![table2_p99](./docs/h2_c1000_m100_p99_scaling.png) |
 |:------------------------------------:|
@@ -284,10 +286,11 @@ pidstat -r -u -p <PID> 1 60
 #### C. CPU Usage
 | Threads | h2server | nghttpd |
 |:---------:|:----------:|:---------:|
-| **1** | 99.846 | 88.154 |
-| **2** | 186.524 | 107.372 |
-| **4** | 208.794 | 109 |
-| **8** | 210.396 | 121.392 |
+| **1**|99.942	| 85.59 |
+| **2**|194.396	| 105.616 |
+| **4**|203.208	| 113.07 |
+| **8**|214.93	| 122.024 |
+
 
 | ![table2_cpu](./docs/h2_c1000_m100_cpu_scaling.png) |
 |:------------------------------------:|
@@ -296,10 +299,11 @@ pidstat -r -u -p <PID> 1 60
 #### D. Memory Usage
 | Threads | h2server | nghttpd |
 |:---------:|:----------:|:---------:|
-| **1** | 140.0394531 | 112.9652344 |
-| **2** | 139.2839844 | 113.3726563 |
-| **4** | 128.4552734 | 113.0642578 |
-| **8** | 128.0207031 | 112.834375 |
+| **1** | 141.1904297	| 112.3808594 |
+| **2** | 136.2841797	| 116.7830078 |
+| **4** | 141.8414063	| 115.0414063 |
+| **8** | 143.1271484	| 112.4423828 |
+
 
 | ![table2_mem](./docs/h2_c1000_m100_mem_scaling.png) |
 |:------------------------------------:|
@@ -308,10 +312,10 @@ pidstat -r -u -p <PID> 1 60
 
 ### ✅ Benchmark Summary
 1. Throughput (QPS)
-   - With a single thread, `nghttpd` achieves higher throughput (217K vs 366K).
+   - With a single thread, `nghttpd` achieves higher throughput (205K vs 321K).
    - With 4–8 threads, `h2server` scales more effectively and outperforms `nghttpd`.
-     - h2server: 426K QPS
-     - nghttpd: 402K QPS
+     - h2server: 404K QPS
+     - nghttpd: 367K QPS
 
     👉 Better scalability with h2server in multi-threaded environments.
 
@@ -322,18 +326,18 @@ pidstat -r -u -p <PID> 1 60
     👉 h2server delivers more stable and lower tail latency under multi-threaded workloads.
 
 3. CPU Usage
-   - `h2server` utilizes CPU resources much more aggressively (e.g., 208% vs 109% at 4 threads).
-   - This reflects a design tradeoff: higher CPU usage in exchange for better throughput and latency.
+   - `h2server` utilizes CPU resources much more aggressively (e.g., 214% vs 122% at 8 threads).
+   - This reflects a tradeoff: higher CPU usage in exchange for better throughput and latency.
 
 4. Memory Usage
    - `nghttpd` consistently shows lower memory consumption across all tests.
-   - `h2server` consumes slightly more memory, but usage decreases as threads scale (from ~140MB at 1 thread to ~128MB at 8 threads).
+   - `h2server` consumes slightly more memory (from ~141MB at 1 thread to ~143MB at 8 threads).
 
 5. Overall Interpretation  
    - h2server: Strong scalability with higher throughput and lower latency under multi-threaded conditions, at the cost of higher CPU utilization.
    - nghttpd: More efficient in single-thread performance and memory usage, but limited scalability.
 
-   👉 In short: “nghttpd excels in single-thread efficiency, while h2server outperforms in multi-thread scalability and tail latency.”
+   👉 In short: “nghttpd excels in single-thread efficiency, while h2server outperforms in multi-thread scalability and tail latency(p99).”
 
 
 - **Notes & test constraints:**  
