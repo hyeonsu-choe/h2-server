@@ -121,7 +121,7 @@ void Server::handle_accept()
 			if (worker_index < 0) {
 				std::cerr << "enqueing failure : all worker is full" << std::endl;
 				close(clnt_sock);
-				break; // 이미 worker 들이 여력이 없는 상태이므로 continue 하여 다른 후속 요청을 처리하지 않고 그냥 중단
+				continue; // break 해버리면, 커널의 대기큐에 남아 있는 요청들이, 다음번 이벤트 발생 시 까지 처리가 보류될 수 있음(edge trigger 모드 이므로)
 			}
 			workers[worker_index].enqueue_sock(clnt_sock);
 		}

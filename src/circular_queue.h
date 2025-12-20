@@ -61,7 +61,7 @@ public:
 		uint32_t t = tail.load(std::memory_order_relaxed);
 		uint32_t h = head.load(std::memory_order_acquire);
 
-		return next(t) == h; 
+		return next(t) == h;
 	}
 
 	bool is_empty()

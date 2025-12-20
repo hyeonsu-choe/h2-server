@@ -328,6 +328,9 @@ void Worker::handle_events(uint32_t ev, int sock, std::shared_ptr<SessionData> s
 
 	// FIN 만 수신된 경우(SSL_read로 확인이 어려운 FIN 만 오는 경우 EPOLLRDHUP 이벤트로 확인)
 	if (check_rd_hup(ev)) {
+		if (ev & EPOLLIN) { // EPOLLRDHUP | EPOLLIN : 데이터 수신과 연결 종료 요청 수신을 둘 다 받은 상황
+			handle_read(sock, session_data); // 소켓 수신 버퍼에 있는 데이터 처리 : 데이터 유실 방지
+		}
 		disconnect_from_client(sock);
 		return;
 	}
