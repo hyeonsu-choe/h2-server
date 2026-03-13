@@ -20,7 +20,7 @@ enum METHOD : uint8_t {
 
 struct Resolved {
 	const Handler* handler;
-	std::string param; // uri 상 파라미터 값
+	std::string_view param; // uri 상 파라미터 값
 };
 
 class RouterNode {
@@ -35,14 +35,13 @@ class RouterNode {
 class Router {
 	private:
 		RouterNode root_node;
-		void split_path_segments(std::vector<std::string>& segs, const std::string& uri) const;
-		bool insert_recursive(const METHOD method, std::vector<std::string>::const_iterator begin, std::vector<std::string>::const_iterator end, RouterNode* current_node, const Handler& handler);
-		const Handler* find_handler_recursive(const METHOD method, std::vector<std::string>::const_iterator begin, std::vector<std::string>::const_iterator end,
-				const RouterNode* current_node, std::string& out_param) const;
-		void traverse_print(std::vector<std::string>& segs, const RouterNode* current_node) const;
+		void split_path_segments(std::vector<std::string_view>& segs, std::string_view uri) const;
+		bool insert_recursive(const METHOD method, std::vector<std::string_view>::const_iterator begin, std::vector<std::string_view>::const_iterator end, RouterNode* current_node, const Handler& handler);
+		const Handler* find_handler_recursive(const METHOD method, std::vector<std::string_view>::const_iterator begin, std::vector<std::string_view>::const_iterator end, const RouterNode* current_node, std::string_view& out_param) const;
+		void traverse_print(std::vector<std::string_view>& segs, const RouterNode* current_node) const;
 
 	public:
-		bool add(const METHOD method, const std::string& uri, Handler handler);
-		const Resolved resolve(const METHOD method, const std::string& uri) const;
+		bool add(const METHOD method, std::string_view uri, Handler handler);
+		const Resolved resolve(const METHOD method, std::string_view uri) const;
 		friend std::ostream& operator<<(std::ostream& os, const Router& router);
 };

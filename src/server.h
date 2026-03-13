@@ -109,13 +109,13 @@ class Server {
 
 		void set_event(int sock, uint32_t events);
 		void handle_accept();
-		void spawn_workers(uint8_t num_threads, const bool use_tls, const std::string& key_path, const std::string& cert_path);
-		bool file_exists(const std::string& filename);
-		bool is_runnable(const bool use_tls, const std::string& key_path, const std::string& cert_path);
+		void spawn_workers(uint8_t num_threads, const bool use_tls, std::string_view key_path, std::string_view cert_path);
+		bool file_exists(std::string_view filename);
+		bool is_runnable(const bool use_tls, std::string_view key_path, std::string_view cert_path);
 
 	public:
 		Server(bool);
 		~Server();
-		bool add_handler(const METHOD method, const std::string uri, Handler handler);
-		void listen_and_serve(const uint8_t num_threads, const bool use_tls, const uint16_t port, const std::string& key_path, const std::string& cert_path);
+		bool add_handler(const METHOD method, std::string_view uri, Handler handler);
+		void listen_and_serve(const uint8_t num_threads, const bool use_tls, const uint16_t port, std::string_view key_path, std::string_view cert_path);
 };

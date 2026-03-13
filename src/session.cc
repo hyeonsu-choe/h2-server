@@ -120,6 +120,7 @@ int on_frame_recv_callback(nghttp2_session* session, const nghttp2_frame *frame,
 			{
 				uint32_t last_stream_id = nghttp2_session_get_last_proc_stream_id(session);
 				nghttp2_submit_goaway(session, NGHTTP2_FLAG_NONE, last_stream_id, NGHTTP2_NO_ERROR, nullptr, 0);
+
 				session_data->state = SessionState::DISCONNECTING;
 			}
 			break;
@@ -184,10 +185,10 @@ int on_header_callback(nghttp2_session* session, const nghttp2_frame* frame,
 				if (!stream_data) {
 					break;
 				}
-				//stream_data->content_type.assign(reinterpret_cast<const char*>(value), valuelen);
+
 				if (stream_data->mime_parser) {
-					std::string content_type(reinterpret_cast<const char*>(value), valuelen);
-					stream_data->mime_parser->extract_boundary(content_type);
+					std::string_view content_type_view(reinterpret_cast<const char*>(value), valuelen);
+					stream_data->mime_parser->extract_boundary(content_type_view);
 				}
 			}
 
@@ -256,7 +257,7 @@ StreamData::~StreamData()
 }
 
 SessionData::SessionData()
-	: router(nullptr), session(nullptr), events(0), state(SessionState::CONNECTING), ssl(nullptr)
+	: router(nullptr), session(nullptr), events(0), state(SessionState::CONNECTING), ssl(nullptr), is_closed(false)
 {
 
 }
@@ -265,12 +266,23 @@ SessionData::~SessionData()
 {
 	if (session) {
 		nghttp2_session_del(session);
+		session = nullptr;
 	}
 
 	if (ssl) {
-		SSL_shutdown(ssl);
 		SSL_free(ssl);
+		ssl = nullptr;
 	}
+}
+
+void SessionData::close_session()
+{
+	if (is_closed) return;
+
+	if (ssl) {
+		SSL_shutdown(ssl);
+	}
+	is_closed = true;
 }
 
 void SessionData::append_to_output_buffer(const uint8_t* data, size_t length)
@@ -293,7 +305,7 @@ void SessionData::consume_input_buffer(size_t length)
 	input_buffer.erase(input_buffer.begin(), input_buffer.begin() + length);
 }
 
-Request::Request(nghttp2_session* session, SessionData* session_data, StreamData* stream_data, const std::string& rel_path)
+Request::Request(nghttp2_session* session, SessionData* session_data, StreamData* stream_data, std::string_view rel_path)
 	: session(session), session_data(session_data), stream_data(stream_data), rel_path(rel_path)
 {
 

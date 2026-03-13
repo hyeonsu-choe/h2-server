@@ -1,6 +1,7 @@
 #pragma once
 
 #include <iostream>
+#include <cstdint>
 #include <string>
 
 constexpr const char* default_key_path = "./cert/server.key";

@@ -44,11 +44,13 @@ class SessionData {
 		uint32_t events;
 		SessionState state;
 		SSL* ssl;
+		bool is_closed;
 
 	public:
 		SessionData();
 		~SessionData();
 
+		void close_session();
 		void append_to_output_buffer(const uint8_t* data, size_t length);
 		void consume_output_buffer(size_t length);
 		void append_to_input_buffer(const uint8_t* data, size_t length);
@@ -60,9 +62,9 @@ class Request {
 		nghttp2_session* session;
 		SessionData* session_data;
 		StreamData* stream_data;
-		const std::string& rel_path;
+		std::string_view rel_path;
 
-		Request(nghttp2_session* session, SessionData* session_data, StreamData* stream_data, const std::string& rel_path);
+		Request(nghttp2_session* session, SessionData* session_data, StreamData* stream_data, std::string_view rel_path);
 		~Request();
 
 		void clear_upload_file_buffer();

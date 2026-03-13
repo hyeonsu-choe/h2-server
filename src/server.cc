@@ -1,3 +1,4 @@
+#include <filesystem>
 #include "server.h"
 
 
@@ -69,7 +70,7 @@ void Server::startup(uint16_t port)
 {
 	try {
 		server_sock = create_listening_socket(addr, port);
-		if (listen(server_sock, 100)==-1) {
+		if (listen(server_sock, SOMAXCONN) == -1) {
 			std::cout << "listen() error" << std::endl;
 			throw -1;
 		}
@@ -94,28 +95,28 @@ void Server::set_event(int sock, uint32_t events)
 	}
 }
 
-bool Server::add_handler(const METHOD method, const std::string uri, Handler handler)
+bool Server::add_handler(const METHOD method, std::string_view uri, Handler handler)
 {
 	return router.add(method, uri, handler);
 }
 
 void Server::handle_accept()
 {
-	struct sockaddr_in client_addr;
-	socklen_t client_addr_size = sizeof(client_addr);
-	int clnt_sock = -1;
+	while (true) { // 일시 실패 시 재시도 용도의 루프
+		struct sockaddr_in client_addr;
+		socklen_t client_addr_size = sizeof(client_addr);
 
-	while (true) {
-		clnt_sock = accept(server_sock, (struct sockaddr*)&client_addr, &client_addr_size);
+		int clnt_sock = accept4(server_sock, (struct sockaddr*)&client_addr, &client_addr_size, SOCK_NONBLOCK | SOCK_CLOEXEC);
 		if (clnt_sock < 0) {
 			if (errno == EINTR) {
 				continue;
 			} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				//std::cerr << "accept() error : " << strerror(errno) << std::endl;
+			} else if (errno == EMFILE || errno == ENFILE) {
+				std::cerr << "accept() error : " << strerror(errno) << std::endl;
 			}
 			break;
 		} else {
-			set_nonblocking_socket(clnt_sock);
 			//std::cout << "client[" << clnt_sock << "] connected ..." << std::endl;
 			int worker_index = load_balancer.acquire_worker_index(clnt_sock);
 			if (worker_index < 0) {
@@ -123,18 +124,24 @@ void Server::handle_accept()
 				close(clnt_sock);
 				continue; // break 해버리면, 커널의 대기큐에 남아 있는 요청들이, 다음번 이벤트 발생 시 까지 처리가 보류될 수 있음(edge trigger 모드 이므로)
 			}
-			workers[worker_index].enqueue_sock(clnt_sock);
+			if (!workers[worker_index].enqueue_sock(clnt_sock)) {
+				std::cerr << "queue is full, drpped connection" << std::endl;
+				close(clnt_sock);
+				continue;
+			}
 		}
 	}
 }
 
-bool Server::file_exists(const std::string& filename)
+bool Server::file_exists(std::string_view filename)
 {
-	std::ifstream file(filename);
-	return file.is_open();
+	if (filename.empty())
+		return false;
+
+	return std::filesystem::is_regular_file(std::filesystem::path(filename));
 }
 
-bool Server::is_runnable(const bool use_tls, const std::string& key_path, const std::string& cert_path)
+bool Server::is_runnable(const bool use_tls, std::string_view key_path, std::string_view cert_path)
 {
 	if (use_tls) {
 		if (!file_exists(key_path)) {
@@ -151,7 +158,7 @@ bool Server::is_runnable(const bool use_tls, const std::string& key_path, const 
 	return true;
 }
 
-void Server::spawn_workers(const uint8_t num_threads, const bool use_tls, const std::string& key_path, const std::string& cert_path)
+void Server::spawn_workers(const uint8_t num_threads, const bool use_tls, std::string_view key_path, std::string_view cert_path)
 {
 	workers.reserve(num_threads);
 	threads.reserve(num_threads);
@@ -165,7 +172,7 @@ void Server::spawn_workers(const uint8_t num_threads, const bool use_tls, const 
 	}
 }
 
-void Server::listen_and_serve(const uint8_t num_threads, const bool use_tls, const uint16_t port, const std::string& key_path, const std::string& cert_path)
+void Server::listen_and_serve(const uint8_t num_threads, const bool use_tls, const uint16_t port, std::string_view key_path, std::string_view cert_path)
 {
 	if (!is_runnable(use_tls, key_path, cert_path)) {
 		return;

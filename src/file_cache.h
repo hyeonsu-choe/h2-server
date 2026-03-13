@@ -37,5 +37,5 @@ class MappedFile {
         }
 };
 
-std::shared_ptr<MappedFile> find_file_from_filecache(const std::string& file_path);
-std::shared_ptr<MappedFile> insert_file_into_filecache(const std::string& file_path);
+std::shared_ptr<MappedFile> find_file_from_filecache(std::string_view file_path);
+std::shared_ptr<MappedFile> insert_file_into_filecache(std::string_view file_path);

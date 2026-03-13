@@ -25,12 +25,12 @@ void MultipartFormParser::rename_temporary_filenames()
 	}
 }
 
-std::string MultipartFormParser::get_filename() const
+std::string_view MultipartFormParser::get_filename() const
 {
 	return current_filename;
 }
 
-bool MultipartFormParser::extract_boundary(const std::string& content_type)
+bool MultipartFormParser::extract_boundary(std::string_view content_type)
 {
 	if (boundary.empty() && !content_type.empty()) {
 		auto start = content_type.find("boundary=");
@@ -65,7 +65,7 @@ bool MultipartFormParser::extract_boundary(const std::string& content_type)
 //my name is hyeonsu choi ^^
 //
 //--------------------------c02c4eddc334baf0--
-std::pair<size_t, size_t> MultipartFormParser::find_filename(const std::string& buffer, size_t& pos)
+std::pair<size_t, size_t> MultipartFormParser::find_filename(std::string_view buffer, size_t& pos)
 {
 	pos = buffer.find(boundary + "\r\n");
 	if (pos != std::string::npos) {
@@ -85,7 +85,7 @@ std::pair<size_t, size_t> MultipartFormParser::find_filename(const std::string& 
 	return {std::string::npos, 0};
 }
 
-std::pair<size_t, size_t> MultipartFormParser::find_file_content(const std::string& buffer, size_t& pos)
+std::pair<size_t, size_t> MultipartFormParser::find_file_content(std::string_view buffer, size_t& pos)
 {
 	auto start = buffer.find("\r\n\r\n", pos);
 	if (start != std::string::npos) {
@@ -100,7 +100,7 @@ std::pair<size_t, size_t> MultipartFormParser::find_file_content(const std::stri
 	return {std::string::npos, 0};
 }
 
-std::pair<size_t, size_t> MultipartFormParser::find_end_boundary(const std::string& buffer, size_t& pos)
+std::pair<size_t, size_t> MultipartFormParser::find_end_boundary(std::string_view buffer, size_t& pos)
 {
 	auto start = buffer.find(boundary + "--", pos);
 	if (start != std::string::npos) {
@@ -115,10 +115,12 @@ bool MultipartFormParser::write(const std::vector<uint8_t>& buffer)
 	if (!boundary.empty()) {
 		std::string temp_filename;
 		size_t pos = 0;
-		std::string string_buffer(buffer.begin(), buffer.end());
+		std::string_view string_buffer(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+
 		auto result = find_filename(string_buffer, pos);
 		if (result.first != std::string::npos) {
-			auto filename = string_buffer.substr(result.first, result.second);
+			auto filename_view = string_buffer.substr(result.first, result.second);
+			auto filename = std::string(filename_view);
 			auto iter = file_map.find(filename);
 			if (iter == file_map.end()) {
 				temp_filename = generate_temporary_filename();

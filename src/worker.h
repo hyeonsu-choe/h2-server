@@ -2,7 +2,6 @@
 
 #include <iostream>
 #include <queue>
-#include <mutex>
 #include <functional>
 
 #include "session.h"
@@ -22,17 +21,16 @@ enum class IOResult {
 class Worker {
 	private:
 		const Router* router;
-		std::function<bool(uint32_t)> check_rd_hup;
 		std::function<void(int, std::shared_ptr<SessionData>)> update_events;
 		std::function<IOResult(int, std::shared_ptr<SessionData>)> fill_input_buffer;
 		std::function<IOResult(int, std::shared_ptr<SessionData>)> flush_output_buffer;
 
 	private:
-		std::mutex m;
 		int signal_fd;
 		int epfd;
 		bool use_tls;
 		SSL_CTX* ssl_ctx;
+		std::atomic<bool> pending_notify; // 이미 notify 가 보내져 있는 상태면 재통지 하지 않기 위한 상태 플래그, true면 통지가 된 것
 
 		CircularQueue<int> socket_queue;
 		std::unordered_map<int, std::shared_ptr<SessionData>> session_map;
@@ -40,11 +38,14 @@ class Worker {
 	private:
 		void bind_callbacks_for_mode(bool use_tls);
 		int create_epoll(size_t epoll_size);
+
 		void set_event(int sock, uint32_t events);
 		void update_event(int sock, uint32_t events, std::shared_ptr<SessionData> session_data);
 		void update_events_h2c(int sock, std::shared_ptr<SessionData> session_data);
 		bool should_disconnect(SessionState session_state);
-		void disconnect_from_client(int sock);
+		bool should_close_after_disconnect(const std::shared_ptr<SessionData>& session_data);
+		void disconnect_from_client(int sock, std::shared_ptr<SessionData> session_data);
+		bool check_close_event(uint32_t events);
 
 		int send_server_connection_header(std::shared_ptr<SessionData> session_data);
 		void handle_tls_handshake(int sock, std::shared_ptr<SessionData> session_data);
@@ -79,8 +80,8 @@ class Worker {
 		Worker(const Worker&) = delete;
 		Worker& operator=(const Worker&) = delete;
 
-		void enqueue_sock(int sock);
+		bool enqueue_sock(int sock);
 		int dequeue_sock();
 		bool is_full();
-		void run(const std::string& key_path, const std::string& cert_path);
+		void run(std::string_view key_path, std::string_view cert_path);
 };

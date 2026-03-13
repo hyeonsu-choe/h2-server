@@ -2,12 +2,12 @@
 #include <sys/stat.h>   // fstat
 #include <fcntl.h>      // open
 #include <unistd.h>     // close
-#include <unordered_map>
+#include <map>
 #include <string>
 
 #include "file_cache.h"
 
-static thread_local std::unordered_map<std::string, std::shared_ptr<MappedFile>> file_cache;
+static thread_local std::map<std::string, std::shared_ptr<MappedFile>, std::less<>> file_cache;
 
 FileContext::FileContext()
 	: size(0), offset(0), data(nullptr)
@@ -87,7 +87,7 @@ bool MappedFile::is_mapped() const
 	return get_data() != nullptr;
 }
 
-std::shared_ptr<MappedFile> find_file_from_filecache(const std::string& file_path)
+std::shared_ptr<MappedFile> find_file_from_filecache(std::string_view file_path)
 {
 	auto itr = file_cache.find(file_path);
 	if (itr == file_cache.end()) {
@@ -96,10 +96,12 @@ std::shared_ptr<MappedFile> find_file_from_filecache(const std::string& file_pat
 	return itr->second;
 }
 
-std::shared_ptr<MappedFile> insert_file_into_filecache(const std::string& file_path)
+std::shared_ptr<MappedFile> insert_file_into_filecache(std::string_view file_path)
 {
 	try {
-		auto result = file_cache.emplace(file_path, std::make_shared<MappedFile>(file_path.c_str()));
+		std::string path = std::string(file_path);
+		auto mapped = std::make_shared<MappedFile>(path.c_str());
+		auto result = file_cache.emplace(std::move(path), std::move(mapped));
 		if (!result.second) {
 			std::cerr << "failed to emplace" << std::endl;
 			return nullptr;	

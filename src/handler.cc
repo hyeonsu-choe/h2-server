@@ -1,7 +1,7 @@
 #include "session.h"
 #include "handler.h"
 
-static std::shared_ptr<MappedFile> load_file_from_filecache(const std::string& path)
+static std::shared_ptr<MappedFile> load_file_from_filecache(std::string_view path)
 {
 	// 검색 및 삽입 실행
 	std::shared_ptr<MappedFile> file = find_file_from_filecache(path);
@@ -14,7 +14,7 @@ static std::shared_ptr<MappedFile> load_file_from_filecache(const std::string& p
 	} else {
 		// 파일 이름은 등록 되어 있으나 실제 파일과 매핑이 되어 있지 않은 경우 매핑 시도
 		if (!file->is_mapped()) {
-			if (!file->map(path.c_str())) {
+			if (!file->map(std::string(path).c_str())) {
 				return nullptr;
 			}
 		}
@@ -25,7 +25,7 @@ static std::shared_ptr<MappedFile> load_file_from_filecache(const std::string& p
 int downloader(Request& request)
 {
 	StreamData* stream_data = request.stream_data;
-	const std::string& rel_path = request.rel_path;
+	std::string_view rel_path = request.rel_path;
 
 	if (rel_path.empty()) {
 		return request.reply_404();
@@ -45,7 +45,7 @@ int downloader(Request& request)
 int uploader(Request& request)
 {
 	StreamData* stream_data = request.stream_data;
-	const std::string& rel_path = request.rel_path;
+	std::string_view rel_path = request.rel_path;
 
 	if (stream_data->mime_parser) {
 		auto is_completed = stream_data->mime_parser->write(stream_data->upload_file_buffer);
