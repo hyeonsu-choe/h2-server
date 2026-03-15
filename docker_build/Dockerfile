@@ -1,5 +1,5 @@
 # build
-FROM ubuntu:22.04 AS build-stage
+FROM ubuntu:24.04 AS build-stage
 WORKDIR /build
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -11,7 +11,7 @@ RUN apt-get install -y --no-install-recommends libssl-dev zlib1g-dev ca-certific
 
 RUN rm -rf /var/lib/apt/lists/*
 
-ARG NGHTTP2_VER=1.60.0
+ARG NGHTTP2_VER=1.68.0
 COPY ./docker_build/nghttp2-${NGHTTP2_VER}.tar.gz /build/
 RUN cd /build && tar -xvf nghttp2-${NGHTTP2_VER}.tar.gz
 RUN cd /build/nghttp2-${NGHTTP2_VER} && ./configure --prefix=/usr && make -j && make install
@@ -20,7 +20,7 @@ COPY ./src/ /build/src
 RUN cd /build/src && make
 
 # runtime
-FROM ubuntu:22.04 AS runtime-stage
+FROM ubuntu:24.04 AS runtime-stage
 WORKDIR /app
 
 ARG DEBIAN_FRONTEND=noninteractive

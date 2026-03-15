@@ -1,36 +1,38 @@
 # H2 Server
 
-**h2server** is a lightweight HTTP/2 server implemented in **`Modern C++`**.  
-It runs on Linux and utilize `epoll`, [`nghttp2`](https://nghttp2.org) and [OpenSSL](https://www.openssl.org/).  
-It supports optional TLS connections and delivers low-latency file services through `mmap`-based caching.  
-The project was inspired by a [webserver](https://github.com/hyeonsu-choe/websvr) I previously developed in Golang, and was built as a personal initiative to study and benchmark system-level technologies such as event-driven I/O, TLS handling, and the HTTP/2 protocol.
+> 🇺🇸 [영문 버전 보기](./docs/README-eng.md)  
 
-[View full documentation](https://hyeonsu-choe.github.io/posts/h2_server/)
+**h2server**는 **`Modern C++`**로 구현한 경량 HTTP/2 서버입니다.  
+Linux 환경에서 동작하며 `epoll`, [`nghttp2`](https://nghttp2.org), [OpenSSL](https://www.openssl.org/)을 사용합니다.  
+선택적인 TLS 연결을 지원하고, `mmap` 기반 캐시를 통해 저지연 파일 서비스를 제공합니다.  
+이 프로젝트는 제가 이전에 Golang으로 개발했던 [webserver](https://github.com/hyeonsu-choe/websvr)에서 영감을 받아 시작되었으며, 이벤트 기반 I/O, TLS 처리, HTTP/2 프로토콜과 같은 시스템 레벨 기술들을 학습하고 벤치마크하기 위한 개인 프로젝트로써 개발되었습니다.
 
-
-## 🚀 Features
-
-- **HTTP/2 Support** using [nghttp2 v1.60.0](https://nghttp2.org)
-- **TLS 1.2/1.3 support** using [OpenSSL v3.0.2](https://www.openssl.org/)
-- Enable HTTP/2 Cleartext (h2c) with `--h2c` option
-- Event-driven I/O model via `epoll (edge-triggered mode)`
-- File caching using `mmap`
-- Supports registering user-defined handler for both `GET` and `POST` Method via `Router`
-- Supports uploading **multipart/from-data**
-- **Custom Load Balancer** using an **indirection table** for efficient multi-thread worker dispatch  
-- **Bounded CircularQueue** for overload-safe scheduling and predictable memory usage 
+[[상세 문서 바로가기]](https://hyeonsu-choe.github.io/posts/h2_server/)
 
 
-## 🛠 Tech Stack
+## 🚀 주요 기능
 
-- OS: Linux(Ubuntu 22.04)
+- [nghttp2 v1.68.0](https://nghttp2.org) 기반 **HTTP/2 지원**
+- [OpenSSL v3.0.13](https://www.openssl.org/) 기반 **TLS 1.2/1.3 지원**
+- `--h2c` 옵션으로 HTTP/2 Cleartext(h2c) 사용 가능
+- `epoll (edge-triggered mode)` 기반 이벤트 주도 I/O 모델
+- `mmap` 기반 파일 캐싱
+- `Router`를 통해 `GET`, `POST` 메서드에 대한 사용자 정의 핸들러 등록 지원
+- **multipart/form-data** 업로드 지원
+- 효율적인 멀티스레드 워커 디스패치를 위한 **indirection table 기반 커스텀 로드 밸런서**
+- 과부하 상황에서도 안전한 스케줄링과 예측 가능한 메모리 사용을 위한 **Bounded CircularQueue**
+
+
+## 🛠 기술 스택
+
+- OS: Linux(Ubuntu 24.04)
 - Language: C++17
 - Networking: epoll, socket, non-blocking I/O 
 - Protocol: HTTP/2([nghttp2](https://nghttp2.org)), TLS([OpenSSL](https://www.openssl.org))
-- Performance: multi-threaded session management, `mmap`-based file caching 
+- Performance: 멀티스레드 세션 관리, `mmap` 기반 파일 캐싱 
 
 
-## ⚙️ Build
+## ⚙️ 빌드
 
 ```bash
 git clone https://github.com/hyeonsu-choe/h2server.git
@@ -38,9 +40,9 @@ cd h2server
 make -j -j$(nproc)
 ```
 
-> **Note**  
-> The commands above assume the project has a **Makefile at the repository root**.  
-> If your `Makefile` is located under `src/`, use:
+> **참고**  
+> 위 명령은 저장소 내 루트 경로에 **Makefile**이 있다고 가정합니다.  
+> `Makefile`이 `src/` 아래에 있다면 다음처럼 실행하세요:
 > ```bash
 > cd h2server/src
 > make -j$(nproc)
@@ -48,7 +50,7 @@ make -j -j$(nproc)
 
 ---
 
-## 🐳 Build with Docker
+## 🐳 Docker로 빌드
 
 ```bash
 git clone https://github.com/hyeonsu-choe/h2server.git
@@ -56,58 +58,58 @@ cd h2server
 docker build -t h2-server -f ./docker_build/Dockerfile .
 ```
 
-> **Note**  
-> Run `docker build` **from the project root** (the directory that contains both `docker_build/` and `src/`).
+> **참고**  
+> `docker build`는 프로젝트 루트(`docker_build/`와 `src/`를 모두 포함하는 디렉터리)에서 실행해야 합니다.
 
 ---
 
-## 🖥 Usage
+## 🖥 사용 방법
 
-### Synopsis
+### 실행 형식
 ```bash
 ./h2server [OPTIONS]
 ```
 
-### 📋 Options
+### 📋 옵션
 
-| Flag                  | Type / Default               | Description                                                       |
-|----------------------|------------------------------|-------------------------------------------------------------------|
-| `-p, --port <NUM>`   | integer / `443`              | TCP port to listen on.                                            |
-| `-k, --key <PATH>`   | path / `./cert/server.key`   | Path to TLS private key file. <br>Not required when using `--h2c`.   |
-| `-c, --cert <PATH>`  | path / `./cert/server.crt`   | Path to TLS certificate file.<br> Not required when using `--h2c`.   |
-| `-n, --threads <NUM>`| integer / `1`                | Number of worker threads.                                         |
-| `--h2c`              | flag                         | Enable HTTP/2 cleartext mode (no TLS).                            |
-| `-h, --help`         | flag                         | Show help and exit.                                               |
+| Flag                  | Type / Default               | 설명 |
+|----------------------|------------------------------|------|
+| `-p, --port <NUM>`   | integer / `443`              | 수신 대기할 TCP 포트 |
+| `-k, --key <PATH>`   | path / `./cert/server.key`   | TLS 개인 키 파일 경로. <br>`--h2c` 사용 시 불필요 |
+| `-c, --cert <PATH>`  | path / `./cert/server.crt`   | TLS 인증서 파일 경로. <br>`--h2c` 사용 시 불필요 |
+| `-n, --threads <NUM>`| integer / `1`                | 워커 스레드 개수 |
+| `--h2c`              | flag                         | HTTP/2 cleartext 모드(TLS 없음) 활성화 |
+| `-h, --help`         | flag                         | 도움말 출력 후 종료 |
 
-### 🐳 Run
+### 🐳 실행 예시
 
-### A) H2 over TLS, https
+### A) TLS 기반 H2, https
 ```bash
 ./h2server --port 443 --key ./cert/server.key --cert ./cert/server.crt --threads 4
 ```
 
-### B) H2C over cleartext, http
+### B) Cleartext 기반 H2C, http
 ```bash
 ./h2server --port 8080 --h2c --threads 4
 ```
 
 ---
 
-## 🐳 Run with Docker
+## 🐳 Docker로 실행
 
-### A) Direct run
+### A) 직접 실행
 ```bash
-# TLS example: expose 443
+# TLS 예시: 443 포트 사용
 docker run -d --name h2server -e RUN_MODE=h2 -e PORT=443 -e THREADS=4 -p 443:443 h2-server
 ```
 
 ```bash
-# H2C example: expose 8080
+# H2C 예시: 8080 포트 사용
 docker run -d --name h2server-h2c -e RUN_MODE=h2c -e PORT=8080 -e THREADS=4 -p 8080:8080 h2-server
 ```
 
-### B) Run with docker-compose
-`docker_build/docker-compose.yml` (example)
+### B) docker-compose로 실행
+`docker_build/docker-compose.yml` (예시)
 ```yaml
 services:
   h2_server:
@@ -121,34 +123,34 @@ services:
       - :::443:443
 ```
 
-Run:
+실행:
 ```bash
 cd docker_build
 docker-compose up -d
 ```
 
-### Routing & Handlers (Registering Handlers)
+### 라우팅 & 핸들러 (핸들러 등록)
 
-**Router**: The Router maps incoming HTTP/2 requests (method + path) to user-defined handlers.  
-It cleanly separates I/O & protocol (nghttp2/OpenSSL/epoll) from application logic.  
+**Router**: Router는 들어오는 HTTP/2 요청(method + path)을 사용자 정의 핸들러에 매핑합니다.  
+이를 통해 I/O 및 프로토콜 처리(nghttp2/OpenSSL/epoll)와 애플리케이션 로직을 깔끔하게 분리합니다.  
 
-- Supported methods: GET, POST
-- Registration timing: Register routes only before server start (before calling listen_and_serve).
+- 지원 메서드: GET, POST
+- 등록 시점: 서버 시작 전(`listen_and_serve` 호출 전)에만 라우트를 등록해야 합니다.
 
 ```cpp
-// Example: path parameter {file_name}
+// 예시: 경로 파라미터 {file_name}
 server.add_handler(Method::GET,  "/files/{file_name}", downloader);
 server.add_handler(Method::POST, "/files",            uploader);
 ```
-- Path parameter: `{file_name}` in `/files/{file_name}`.  
-- Matching priority:  
-  - exact > parameter > wildcard.
+- 경로 파라미터: `/files/{file_name}`의 `{file_name}`  
+- 매칭 우선순위:  
+  - exact > parameter > wildcard
 
-### Handler Signature  
+### 핸들러 시그니처  
 
-Handlers use the form `int handler(Request& request)`.
+핸들러는 `int handler(Request& request)` 형태를 사용합니다.
 
-Example: File Downloader
+예시: 파일 다운로드 핸들러
 ```cpp
 int downloader(Request& request)
 {
@@ -170,54 +172,62 @@ int downloader(Request& request)
     return request.reply_ok_with_file();
 }
 ```
-Response Helpers
-- `reply_ok_with_file()` - send file body with `200 OK`
-- `reply_ok` - `200 OK` without body
+응답 헬퍼
+- `reply_ok_with_file()` - 파일 본문과 함께 `200 OK` 응답
+- `reply_ok` - 본문 없이 `200 OK`
 - `reply_404` - `404 Not Found`
 
 
-## 📊 Benchmark Results (via `h2load`)
+## 📊 벤치마크 (`h2load` 기준)
 
-> 🧪 **Benchmark Methodology**:  
-> - Benchmarks were executed 5 times each and averaged.
-> - Latency percentiles were calculated from TSV(Tab-Separated Values) logs exported by `h2load`.
-> - CPU and memory usage were captured using `pidstat` during the 60-seconds load duration.
+VMware 가상화 환경 특성상 호스트 OS(Windows)의 스케줄링 간섭 및 자원 경합으로 인해 측정값의 변동 폭(Max-Min)이 다소 크게 발생합니다.  
 
-> 📌 **Key Findings**:
-> - MMAP optimization reduced p99 latency by over 60% in both low and high concurrency settings.
-> - TLS introduces moderate overhead (~20-30ms at p99), but performance remained stable.
-> - Without mmap-based caching, the server opened many files concurrently during response handling, increasing the number of simultaneously open File Descriptors and eventually hitting the process limit.
+- 통계적 접근: 
+    - 단순 평균값은 이상치(Outlier)에 왜곡될 소지가 있어, 총 5회 이상의 반복 측정 후 중앙값(Median) 및 **백분위수($P50, P99$)** 를 기준으로 성능을 평가함
+- 유의성 판단:
+    - 가상화 레이어의 간섭을 최소화하기 위해 CPU Affinity(**taskset**)를 설정하고, Warm-up 타임을 부여함
 
-### 🌐 Benchmark Environment
 
-All benchmarks were conducted in a virtualized environment using VMware:
+> 🧪 **벤치마크 방법**:  
+> - 각 벤치마크는 케이스 별 5회씩 연속 실행 후 그 결과 값을 사용했습니다.
+> - 지연 시간 백분위는 `h2load`가 출력한 TSV(Tab-Separated Values) 로그를 기준으로 계산했습니다.
+> - CPU 및 메모리 사용량은 60초 부하 구간 동안 `pidstat`로 수집했습니다.
+
+> 📌 **핵심 결과**:
+> - MMAP 최적화는 낮은 동시성과 높은 동시성 환경 모두에서 p99 지연 시간을 60% 이상 줄였습니다.
+> - TLS는 중간 정도의 오버헤드(p99 기준 약 20~30ms)를 유발했지만, 전체 성능은 안정적으로 유지되었습니다.
+> - mmap 기반 캐시가 없을 경우, 응답 처리 중 많은 파일이 동시에 열리면서 개발된 파일 디스크립터 수가 증가했고 결국 리소스 한계에 도달하게 되면서 실패율 증가로 이어졌습니다.
+
+
+### 🌐 벤치마크 환경
+
+모든 벤치마크는 VMware 기반 가상 환경에서 수행되었습니다:
 > - **Host OS**: Windows 11 Pro (64-bit, 24H2)
-> - **Virtualization**: VMware Workstation 17 Pro
+> - **가상화 환경**: VMware Workstation 17 Pro
 > - **Guest OS**: Ubuntu 22.04 LTS (64-bit)
-> - **vCPU Configuration**: 4 processors * 2 = **8 vCPUs total**
 > - **Host CPU**: AMD Ryzen 5 7500F (6-Core)
-> - **Allocated Memory**: 8 GB
-> - **Disk**: Virtual disk backed by NVMe SSD
-> - **Network**: Host-only network via VMware virtual interface  
->   All benchmarking traffic was confined to the guest <-> guest communication layer.  
->   External Internet was not used during tests.
-> - **Kernel Version**: 6.8.0
-> - **Compiler**: g++ 11.4.0 (C++17)
-> - **Benchmark Tools**: 
->   - `h2load`: v1.60.0 
->   - `pidstat`: v12.5.2
+> - **vCPU 구성**: 서버에 4개 코어, 클라이언트에 2개 코어 할당
+> - **할당 메모리**: 8 GB
+> - **디스크**: NVMe SSD 기반 가상 디스크
+> - **네트워크**: VMware 가상 인터페이스를 통한 Host-only network  
+> - **커널 버전**: 6.17
+> - **컴파일러**: g++ 13.3.0 (C++17)
+> - **벤치마크 도구**: 
+>   - `h2load`: v1.68.0 
+>   - `pidstat`: v12.6.1
 
-All benchmarks were performed using `h2load` from nghttp2:
+모든 벤치마크는 nghttp2의 `h2load`를 사용해 수행했습니다:
 ```bash
 ./h2load -c<clients> -m<streams> --warm-up-time=5 -D 60 <web server addr>/index.html  
 ```
-⚠️ **Note**: `/index.html` size is 158 byte.
+⚠️ **참고**: `/index.html` 파일 크기는 158바이트입니다.
 
-### ▶️ Client-Side Test Command
+
+### ▶️ 클라이언트 측 테스트 명령
 ```bash
 ./h2load -c1000 -m100 --warm-up-time=5 -D 60 https://test.com/index.html --log-file=result.tsv
 ```
-Latency percentiles (p99, p90, p50) were calculated  from the TSV file as follows:
+p99, p90, p50 지연 시간은 TSV 파일로부터 다음과 같이 계산했습니다:
 ```bash
 # p99
 total=$(cut -f3 result.tsv | wc -l); p99=$(echo "$total * 0.99" | bc | cut -d. -f1); cut -f3 result.tsv | sort -n | sed -n "${p99}p"
@@ -228,13 +238,13 @@ total=$(cut -f3 result.tsv | wc -l); p90=$(echo "$total * 0.90" | bc | cut -d. -
 # p50
 total=$(cut -f3 result.tsv | wc -l); p50=$(echo "$total * 0.50" | bc | cut -d. -f1); cut -f3 result.tsv | sort -n | sed -n "${p50}p"
 ```
-CPU and memory usage were measured on the server using the following perf command:
+서버 측 CPU 및 메모리 사용량은 다음 명령으로 측정했습니다:
 ```bash
 pidstat -r -u -p <PID> 1 60
 ```
 
 
-### 🏆 Server Performance Comparison
+### 🏆 성능 비교
 
 | Server | Version / Commit | QPS | Success Rate (%) | p99 Latency (ms) | p90 Latency (ms) | p50 Latency (ms)  | CPU Usage (%) | Memory Usage (MB) |
 |---------------|-------------|------------|-----------|--------|-------|----------|---------|----------|
@@ -244,20 +254,22 @@ pidstat -r -u -p <PID> 1 60
 
 | ![table1_qps](./docs/h2_c1000_m100_3servers_qps.png) | ![table1_p99](./docs/h2_c1000_m100_3servers_p99.png) |
 |:------------------------------------:|:------------------------------------:|
-| **QPS (Throughput): Higher is better**                 | **p99 Latency: Lower is better**                      |
+| **QPS (Throughput): 높을수록 좋음**                 | **p99 Latency: 낮을수록 좋음**                      |
 
 | ![table1_cpu](./docs/h2_c1000_m100_3servers_cpu.png) | ![table1_mem](./docs/h2_c1000_m100_3servers_mem.png) |
 |:------------------------------------:|:------------------------------------:|
-| **CPU Usage**                        | **Memory Usage**                     |
+| **CPU 사용량**                        | **메모리 사용량**                     |
 
-⚠️ **Note**: For **libevent-server**, running `h2load` with `-c1000` and `-m100` hits resource limits during response handling when the default file descriptor limit (1024) is used, resulting in a failure rate below 20%, which prevents meaningful performance measurement. Therefore, for libevent-server we increased the file descriptor limit from the default 1,024 to 65,535 using `ulimit -n` before running the tests.
+⚠️ **참고**: **libevent-server**의 경우 기본 파일 디스크립터 제한(1024) 상태에서 `h2load -c1000 -m100`을 실행하면 응답 처리 중 리소스 한계에 도달하여 실패율이 20% 미만으로 떨어졌고, 이로 인해 유의미한 성능 측정이 불가능했습니다.  
+따라서 libevent-server는 테스트 전에 `ulimit -n`으로 파일 디스크립터 제한을 기본값 1,024에서 65,535로 높인 뒤 벤치마크를 수행했습니다.
 
-### 📈 Thread Scaling Performance
-> **Test Notes**
-> - **libevent-server**: Excluded from the comparison because it supports only a single thread.
-> - **nghttpd**: When running with `-n 8` (8 worker threads), the default file descriptor limit (1024) caused `h2load` to hang indefinitely. For this specific test, we raised the limit to **65,535** using `ulimit -n` to complete the benchmark.
+### 📈 스레드 확장 성능
+
+> **테스트 참고 사항**
+> - **libevent-server**: 단일 스레드만 지원하므로 비교 대상에서 제외했습니다.
+> - **nghttpd**: `-n 8`(워커 스레드 8개)로 실행할 때 기본 파일 디스크립터 제한(1024) 때문에 `h2load`가 무한 대기 상태에 빠졌습니다. 이 테스트만 `ulimit -n`으로 제한을 **65,535**까지 높여 벤치마크를 완료했습니다.
 >
-> Unless otherwise noted, other tests used the default file descriptor limit.
+> 별도 언급이 없는 다른 테스트는 기본 파일 디스크립터 제한을 사용했습니다.
 
 #### A. QPS
 | Threads | h2server | nghttpd |
@@ -269,7 +281,7 @@ pidstat -r -u -p <PID> 1 60
 
 | ![table2_qps](./docs/h2_c1000_m100_qps_scaling.png) |
 |:------------------------------------:|
-| **QPS (Throughput): Higher is better** |
+| **QPS (Throughput): 높을수록 좋음** |
 
 #### B. p99 Latency
 | Threads | h2server | nghttpd |
@@ -281,7 +293,7 @@ pidstat -r -u -p <PID> 1 60
 
 | ![table2_p99](./docs/h2_c1000_m100_p99_scaling.png) |
 |:------------------------------------:|
-| **p99 Latency: Lower is better** |
+| **p99 Latency: 낮을수록 좋음** |
 
 #### C. CPU Usage
 | Threads | h2server | nghttpd |
@@ -294,7 +306,7 @@ pidstat -r -u -p <PID> 1 60
 
 | ![table2_cpu](./docs/h2_c1000_m100_cpu_scaling.png) |
 |:------------------------------------:|
-| **CPU Usage** |
+| **CPU 사용량** |
 
 #### D. Memory Usage
 | Threads | h2server | nghttpd |
@@ -307,50 +319,50 @@ pidstat -r -u -p <PID> 1 60
 
 | ![table2_mem](./docs/h2_c1000_m100_mem_scaling.png) |
 |:------------------------------------:|
-| **Memory Usage** |
+| **메모리 사용량** |
 
 
-### ✅ Benchmark Summary
+### ✅ 벤치마크 요약
 1. Throughput (QPS)
-   - With a single thread, `nghttpd` achieves higher throughput (205K vs 321K).
-   - With 4–8 threads, `h2server` scales more effectively and outperforms `nghttpd`.
+   - 단일 스레드에서는 `nghttpd`가 더 높은 처리량을 보였습니다(205K vs 321K).
+   - 4~8 스레드 환경에서는 `h2server`가 더 효과적으로 확장되며 `nghttpd`를 앞섰습니다.
      - h2server: 404K QPS
      - nghttpd: 367K QPS
 
-    👉 Better scalability with h2server in multi-threaded environments.
+    👉 멀티스레드 환경에서는 h2server가 더 나은 확장성을 보였습니다.
 
 2. p99 Latency
-   - At 1–2 threads, `nghttpd` shows lower latency.
-   - As threads increase, `h2server` reduces latency more effectively and maintains lower p99 latency at 4–8 threads.
+   - 1~2 스레드 구간에서는 `nghttpd`가 더 낮은 지연 시간을 보였습니다.
+   - 스레드 수가 증가할수록 `h2server`는 지연 시간을 더 효과적으로 낮추며, 4~8 스레드 구간에서 더 낮은 p99 지연 시간을 유지했습니다.
 
-    👉 h2server delivers more stable and lower tail latency under multi-threaded workloads.
+    👉 멀티스레드 워크로드에서는 h2server가 더 안정적이고 낮은 tail latency를 보여줍니다.
 
 3. CPU Usage
-   - `h2server` utilizes CPU resources much more aggressively (e.g., 214% vs 122% at 8 threads).
-   - This reflects a tradeoff: higher CPU usage in exchange for better throughput and latency.
+   - `h2server`는 CPU 자원을 훨씬 더 적극적으로 활용했습니다(예: 8스레드에서 214% vs 122%).
+   - 이는 더 높은 처리량과 더 낮은 지연 시간을 위해 CPU 사용량을 더 많이 소비하는 트레이드오프를 의미합니다.
 
 4. Memory Usage
-   - `nghttpd` consistently shows lower memory consumption across all tests.
-   - `h2server` consumes slightly more memory (from ~141MB at 1 thread to ~143MB at 8 threads).
+   - `nghttpd`는 모든 테스트에서 일관되게 더 낮은 메모리 사용량을 보였습니다.
+   - `h2server`는 약간 더 많은 메모리를 사용했습니다(1스레드 약 141MB → 8스레드 약 143MB).
 
-5. Overall Interpretation  
-   - h2server: Strong scalability with higher throughput and lower latency under multi-threaded conditions, at the cost of higher CPU utilization.
-   - nghttpd: More efficient in single-thread performance and memory usage, but limited scalability.
+5. 전체 해석  
+   - h2server: 더 높은 CPU 사용량을 대가로, 멀티스레드 환경에서 높은 처리량과 낮은 지연 시간, 강한 확장성을 보여줍니다.
+   - nghttpd: 단일 스레드 성능과 메모리 효율성은 우수하지만, 확장성은 제한적입니다.
 
-   👉 In short: “nghttpd excels in single-thread efficiency, while h2server outperforms in multi-thread scalability and tail latency(p99).”
-
-
-- **Notes & test constraints:**  
-  - **libevent-server** supports only a single thread and was excluded from scaling charts.  
-  - With **nghttpd `-n 8`**, the default file descriptor limit (**1024**) caused `h2load` to hang; raising it to **65,535** via `ulimit -n` was required to complete the benchmark.  
-  - Unless otherwise noted, other tests used the default file descriptor limit.
+   👉 한 줄 요약: **“nghttpd는 단일 스레드 효율에 강하고, h2server는 멀티스레드 확장성과 tail latency(p99)에서 우수합니다.”**
 
 
-## 📜 License
-This project is licensed under the [MIT License](./LICENSE)
+- **참고 및 테스트 제약 사항**:  
+  - **libevent-server**는 단일 스레드만 지원하므로 확장성 그래프에서 제외했습니다.  
+  - **nghttpd `-n 8`**에서는 기본 파일 디스크립터 제한(**1024**) 때문에 `h2load`가 멈추었고, 벤치마크를 완료하려면 `ulimit -n`으로 제한을 **65,535**까지 높여야 했습니다.  
+  - 별도 언급이 없는 다른 테스트는 기본 파일 디스크립터 제한을 사용했습니다.
 
 
-## 🧑‍💻 Contact
+## 📜 라이선스
+이 프로젝트는 [MIT License](./LICENSE)를 따릅니다.
+
+
+## 🧑‍💻 연락처
 - **Maintainer**: Hyeonsu Choi
 - **Email**: [hyeonsu.choe@gmail.com](mailto:hyeonsu.choe@gmail.com)
 - **GitHub**: [github.com/hyeonsu-choe](https://github.com/hyeonsu-choe) 
