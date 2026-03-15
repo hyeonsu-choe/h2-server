@@ -5,7 +5,6 @@
 #include <functional>
 
 #include "session.h"
-#include "circular_queue.h"
 
 struct ssl_ctx_st;
 using SSL_CTX = ssl_ctx_st;
@@ -26,18 +25,21 @@ class Worker {
 		std::function<IOResult(int, std::shared_ptr<SessionData>)> flush_output_buffer;
 
 	private:
-		int signal_fd;
+		int server_sock;
+		struct sockaddr_in server_addr;
+
 		int epfd;
 		bool use_tls;
 		SSL_CTX* ssl_ctx;
-		std::atomic<bool> pending_notify; // 이미 notify 가 보내져 있는 상태면 재통지 하지 않기 위한 상태 플래그, true면 통지가 된 것
 
-		CircularQueue<int> socket_queue;
 		std::unordered_map<int, std::shared_ptr<SessionData>> session_map;
 
 	private:
-		void bind_callbacks_for_mode(bool use_tls);
+		void set_nonblocking_socket(int& sock) const;
+		void enable_address_and_port_reuse(int& sock) const;
+		int create_listening_socket(const uint16_t port);
 		int create_epoll(size_t epoll_size);
+		void bind_callbacks_for_mode(bool use_tls);
 
 		void set_event(int sock, uint32_t events);
 		void update_event(int sock, uint32_t events, std::shared_ptr<SessionData> session_data);
@@ -49,8 +51,9 @@ class Worker {
 
 		int send_server_connection_header(std::shared_ptr<SessionData> session_data);
 		void handle_tls_handshake(int sock, std::shared_ptr<SessionData> session_data);
-		void handle_new_connections();
+		void handle_new_connections(int clnt_sock);
 
+		void handle_accept(int sock);
 		void handle_events(uint32_t ev, int sock, std::shared_ptr<SessionData> session_data);
 		IOResult handle_read(int sock, std::shared_ptr<SessionData> session_data);
 		IOResult handle_write(int sock, std::shared_ptr<SessionData> session_data);
@@ -71,7 +74,7 @@ class Worker {
 		IOResult fill_input_buffer_tls(int sock, std::shared_ptr<SessionData> session_data);
 		IOResult flush_output_buffer_tls(int sock, std::shared_ptr<SessionData> session_data);
 
-		bool startup();
+		bool startup(const uint16_t port);
 
 	public:
 		Worker(const Router* router, bool use_tls);
@@ -80,8 +83,5 @@ class Worker {
 		Worker(const Worker&) = delete;
 		Worker& operator=(const Worker&) = delete;
 
-		bool enqueue_sock(int sock);
-		int dequeue_sock();
-		bool is_full();
-		void run(std::string_view key_path, std::string_view cert_path);
+		void run(const uint16_t server_port, std::string_view key_path, std::string_view cert_path);
 };

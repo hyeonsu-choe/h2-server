@@ -21,12 +21,11 @@ const int BUF_SIZE = 2048;
 
 
 Worker::Worker(const Router* router, bool use_tls = true) :
+	server_sock(-1),
 	use_tls(use_tls), router(router),
-	signal_fd(-1), epfd(-1),
-	pending_notify(false),
+	epfd(-1),
 	ssl_ctx(nullptr),
-	update_events(nullptr), fill_input_buffer(nullptr), flush_output_buffer(nullptr),
-	socket_queue(4096)
+	update_events(nullptr), fill_input_buffer(nullptr), flush_output_buffer(nullptr)
 {
 	bind_callbacks_for_mode(use_tls);
 }
@@ -36,10 +35,10 @@ Worker::Worker(Worker&& worker)
 	router = std::exchange(worker.router, nullptr);
 	use_tls = worker.use_tls;
 	epfd = std::exchange(worker.epfd, -1);
-	signal_fd = std::exchange(worker.signal_fd, -1);
+	server_sock = std::exchange(worker.server_sock, -1);
+	server_addr = worker.server_addr;
 	ssl_ctx = std::exchange(worker.ssl_ctx, nullptr);
 
-	socket_queue.swap(worker.socket_queue);
 	session_map.swap(worker.session_map);
 
 	update_events = worker.update_events;
@@ -49,12 +48,12 @@ Worker::Worker(Worker&& worker)
 
 Worker::~Worker()
 {
-	if (epfd > 0) {
-		close(epfd);
+	if (server_sock > 0) {
+		close(server_sock);
 	}
 
-	if (signal_fd > 0) {
-		close(signal_fd);
+	if (epfd > 0) {
+		close(epfd);
 	}
 
 	if (ssl_ctx) {
@@ -62,6 +61,46 @@ Worker::~Worker()
 	}
 
 	session_map.clear(); // 세션 맵 반납을 명시적으로 수행 (하지 않아도 됨)
+}
+
+void Worker::set_nonblocking_socket(int& sock) const
+{
+	int flag = fcntl(sock, F_GETFL, 0);
+	fcntl(sock, F_SETFL, flag|O_NONBLOCK);
+}
+
+void Worker::enable_address_and_port_reuse(int& sock) const
+{
+	if (sock > 0) {
+		int opt = true;
+		if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (void*)&opt, sizeof(opt)) < 0) {
+			std::cout << "setsockopt(REUSEADDR) error: " << strerror(errno) << std::endl;
+		}
+
+		if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
+			std::cerr << "setsockopt(SO_REUSEPORT) error: " << strerror(errno) << std::endl;
+		}
+	}
+}
+
+int Worker::create_listening_socket(const uint16_t port)
+{
+	int server_sock = socket(PF_INET, SOCK_STREAM, 0);
+	if (server_sock > 0) {
+		memset(&server_addr, 0, sizeof(struct sockaddr_in));
+		server_addr.sin_family = AF_INET;
+		server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+		server_addr.sin_port = htons(port);
+
+		enable_address_and_port_reuse(server_sock);
+		set_nonblocking_socket(server_sock);
+
+		if (bind(server_sock, (struct sockaddr*)&server_addr, sizeof(struct sockaddr_in)) == -1) {
+			std::cout << "bind() error: " << strerror(errno) << std::endl;
+			throw -1;
+		}
+	}
+	return server_sock;
 }
 
 int Worker::create_epoll(size_t epoll_size)
@@ -320,37 +359,53 @@ bool Worker::handle_tls_accept(int sock, std::shared_ptr<SessionData> session_da
 	return true;
 }
 
-void Worker::handle_new_connections()
+void Worker::handle_new_connections(int clnt_sock)
 {
-	while (true) {
-		int clnt_sock = dequeue_sock();
+	// http2 session 생성
+	std::shared_ptr<SessionData> session_data = std::make_shared<SessionData>();
+	if (init_session_data(session_data) != 0) {
+		close(clnt_sock);
+		return;
+	}
+	session_data->router = router;
+	session_map.emplace(clnt_sock, session_data);
+
+	if (use_tls) {
+		if (!handle_tls_accept(clnt_sock, session_data)) {
+			return;
+		}
+	}
+
+	SessionState session_state = establish_connection(clnt_sock, session_data);
+	if (session_state == SessionState::DISCONNECTING) {
+		disconnect_from_client(clnt_sock, session_data);
+		return;
+	}
+
+	session_data->state = session_state;
+	update_events(clnt_sock, session_data);
+}
+
+void Worker::handle_accept(int sock)
+{
+	while (true) { // 일시 실패 시 재시도 용도의 루프
+		struct sockaddr_in client_addr;
+		socklen_t client_addr_size = sizeof(client_addr);
+
+		int clnt_sock = accept4(server_sock, (struct sockaddr*)&client_addr, &client_addr_size, SOCK_NONBLOCK | SOCK_CLOEXEC);
 		if (clnt_sock < 0) {
-			break;
-		}
-
-		// http2 session 생성
-		std::shared_ptr<SessionData> session_data = std::make_shared<SessionData>();
-		if (init_session_data(session_data) != 0) {
-			close(clnt_sock);
-			continue;
-		}
-		session_data->router = router;
-		session_map.emplace(clnt_sock, session_data);
-
-		if (use_tls) {
-			if (!handle_tls_accept(clnt_sock, session_data)) {
+			if (errno == EINTR) {
 				continue;
+			} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				//std::cerr << "accept() error : " << strerror(errno) << std::endl;
+			} else if (errno == EMFILE || errno == ENFILE) {
+				std::cerr << "accept() error : " << strerror(errno) << std::endl;
 			}
+			break;
+		} else {
+			//std::cout << "client[" << clnt_sock << "] connected ..." << std::endl;
+			handle_new_connections(clnt_sock);
 		}
-
-		SessionState session_state = establish_connection(clnt_sock, session_data);
-		if (session_state == SessionState::DISCONNECTING) {
-			disconnect_from_client(clnt_sock, session_data);
-			continue;
-		}
-
-		session_data->state = session_state;
-		update_events(clnt_sock, session_data);
 	}
 }
 
@@ -558,79 +613,33 @@ bool Worker::validate_alpn(std::shared_ptr<SessionData> session_data)
 	return true;
 }
 
-bool Worker::enqueue_sock(int sock)
+bool Worker::startup(const uint16_t port)
 {
-	if (!socket_queue.push(sock)) {
-		return false;
-	}
-
-	bool expected = false;
-	// cas가 아니라서 교체 성공시 true, 교체 실패시 false 반환
-	if (pending_notify.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-		uint64_t signal = 1;
-
-		// notify signal
-		while (true) { // EINTR 같은 오류로 signal을 정상적으로 보내지 못하고 중단 됐을때를 대비하여 다시 시도 하는 용도의 루프
-			ssize_t ret = write(signal_fd, &signal, sizeof(signal));
-			if (ret == sizeof(signal)) {
-				break;
-			}
-
-			if (ret < 0 && errno == EINTR) {
-				continue;
-			}
-
-			std::cerr << "eventfd write() error : " << strerror(errno) <<  std::endl;
-			break;
-		}
-
-	}
-
-	return true;
-}
-
-int Worker::dequeue_sock()
-{
-	int clnt_sock = -1;
-
-	if (!socket_queue.is_empty()) {
-		clnt_sock = socket_queue.front();
-		socket_queue.pop();
-	}
-
-	return clnt_sock;
-}
-
-bool Worker::is_full()
-{
-	return socket_queue.is_full();
-}
-
-bool Worker::startup()
-{
-	epfd = epoll_create(EPOLL_SIZE);
+	epfd = create_epoll(EPOLL_SIZE);
 	if (epfd < 0) {
-		std::cerr << "failed to create epoll object" << std::endl;
+		std::cerr << "create_epoll failed" << std::endl;
 		return false;
 	}
 
-	signal_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-	if (signal_fd < 0) {
-		std::cerr << "failed to create event fd" << std::endl;
+	server_sock = create_listening_socket(port);
+	if (server_sock < 0) {
+		std::cerr << "create_listening_socket failed" << std::endl;
 		return false;
 	}
 
-	struct epoll_event event;
-	event.events = EPOLLIN;
-	event.data.fd = signal_fd;
-	epoll_ctl(epfd, EPOLL_CTL_ADD, signal_fd, &event);
+	if (listen(server_sock, SOMAXCONN) < 0) {
+		std::cout << "listen failed" << std::endl;
+		return false;
+	}
 
+	set_event(server_sock, EPOLLIN);
 	return true;
 }
 
-void Worker::run(std::string_view key_path, std::string_view cert_path)
+void Worker::run(const uint16_t server_port, std::string_view key_path, std::string_view cert_path)
 {
-	if (!startup()) {
+	if (!startup(server_port)) {
+		std::cerr << "worker startup failed" << std::endl;
 		return;
 	}
 
@@ -652,25 +661,8 @@ void Worker::run(std::string_view key_path, std::string_view cert_path)
 		}
 
 		for (int i = 0; i < event_count; i++) {
-			if (events[i].data.fd == signal_fd) {
-				while (true) {
-					// flush signal
-					uint64_t signal;
-					while(read(signal_fd, &signal, sizeof(signal)) == sizeof(signal));
-
-					handle_new_connections();
-
-					pending_notify.store(false, std::memory_order_release);
-
-					if (socket_queue.is_empty()) {
-						break;
-					}
-
-					bool expected = false;
-					if (!pending_notify.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-						break; // 실패 시 이미 notify 가 걸려 있는 것이니 루프 중단
-					}
-				}
+			if (events[i].data.fd == server_sock) {
+				handle_accept(events[i].data.fd);
 			} else {
 				uint32_t ev = events[i].events;
 				int clnt_sock = events[i].data.fd;
