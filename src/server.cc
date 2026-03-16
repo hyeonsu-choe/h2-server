@@ -49,10 +49,16 @@ void Server::spawn_workers()
 
 	// worker 객체 생성 및 등록 & 스레드 생성
 	for (uint8_t i = 0; i < config.num_threads; i++) {
-		workers.emplace_back(&router, config.use_tls);
+		if (config.use_tls) {
+			workers.emplace_back(std::make_unique<WorkerAdapter<TlsWorker>>(&router));
+		} else {
+			workers.emplace_back(std::make_unique<WorkerAdapter<H2cWorker>>(&router));
+		}
 	}
 	for (uint8_t i = 0; i < config.num_threads; i++) {
-		threads.emplace_back(&Worker::run, &workers[i], config.port, config.key_path, config.cert_path);
+		threads.emplace_back([this, i]() {
+					workers[i]->run(config.port, config.key_path, config.cert_path);
+				});
 	}
 }
 
