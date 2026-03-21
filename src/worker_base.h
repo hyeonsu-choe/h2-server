@@ -15,11 +15,9 @@
 #include <sys/eventfd.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
-#include <nghttp2/nghttp2.h>
 #include <openssl/ssl.h>
 
-#include "transport_policy.h"
-#include "session.h"
+#include "session_engine.h"
 
 struct ssl_ctx_st;
 using SSL_CTX = ssl_ctx_st;
@@ -117,34 +115,9 @@ class WorkerBase {
 			return events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP);
 		}
 
-		bool should_close_after_disconnect(const std::shared_ptr<SessionData>& session_data)
-		{
-			if (session_data->state != SessionState::DISCONNECTING) {
-				return false;
-			}
-
-			// DISCONNECTING 단계에 진입 했으면 read는 더이상 중요치 않음, write 만 신경 쓰면 됨
-			return !nghttp2_session_want_write(session_data->session) && session_data->output_buffer.empty();
-		}
-
-		int send_server_connection_header(std::shared_ptr<SessionData> session_data)
-		{
-			nghttp2_settings_entry iv[1] = {
-				{NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100}
-			};
-
-			int rv = nghttp2_submit_settings(session_data->session, NGHTTP2_FLAG_NONE, iv, sizeof(iv) / sizeof(iv[0]));
-			if (rv != 0) {
-				std::cerr << "nghttp2_submit_settings() error: " << nghttp2_strerror(rv) << std::endl;
-				return -1;
-			}
-
-			return 0;
-		}
-
 		bool establish_connection(int sock, const std::shared_ptr<SessionData>& session_data)
 		{
-			if (send_server_connection_header(session_data) != 0) {
+			if (SessionEngine::send_server_connection_header(session_data) != 0) {
 				std::cerr << "send_server_connection() error" << std::endl;
 				return false;
 			}
@@ -164,34 +137,6 @@ class WorkerBase {
 			}
 		}
 
-		IOResult feed_input_buffer(const std::shared_ptr<SessionData>& session_data)
-		{
-			while (!session_data->input_buffer.empty()) {
-				nghttp2_ssize fed_len = nghttp2_session_mem_recv2(
-						session_data->session,
-						session_data->input_buffer.data(),
-						session_data->input_buffer.size());
-				if (fed_len < 0) {
-					std::cerr << "nghttp2_session_mem_recv2() error: " << nghttp2_strerror((int)fed_len) << std::endl;
-					return IOResult::SHUTDOWN;
-				}
-				session_data->consume_input_buffer(fed_len);
-			}
-			return IOResult::SUCCESS;
-		}
-
-		void fill_output_buffer(std::shared_ptr<SessionData> session_data)
-		{
-			while (nghttp2_session_want_write(session_data->session)) {
-				const uint8_t* data;
-				size_t length = nghttp2_session_mem_send2(session_data->session, &data);
-				if (length <= 0) {
-					break;
-				}
-				session_data->append_to_output_buffer(data, length);
-			}
-		}
-
 		IOResult handle_read(int sock, const std::shared_ptr<SessionData>& session_data)
 		{
 			IOResult input_result = TransportPolicy::fill_input_buffer(sock, session_data);
@@ -199,13 +144,13 @@ class WorkerBase {
 				return IOResult::SHUTDOWN;
 			}
 
-			IOResult feed_result = feed_input_buffer(session_data);
+			IOResult feed_result = SessionEngine::feed_input_buffer(session_data);
 			if (feed_result == IOResult::SHUTDOWN) {
 				return IOResult::SHUTDOWN;
 			}
 
 			TransportPolicy::update_events(epfd, sock, session_data);
-			if (should_close_after_disconnect(session_data)) {
+			if (SessionEngine::should_close_after_disconnect(session_data)) {
 				return IOResult::SHUTDOWN;
 			}
 
@@ -214,14 +159,14 @@ class WorkerBase {
 
 		IOResult handle_write(int sock, const std::shared_ptr<SessionData>& session_data)
 		{
-			fill_output_buffer(session_data);
+			SessionEngine::fill_output_buffer(session_data);
 			IOResult result = TransportPolicy::flush_output_buffer(sock, session_data);
 			if (result == IOResult::SHUTDOWN) {
 				return IOResult::SHUTDOWN;
 			}
 
 			TransportPolicy::update_events(epfd, sock, session_data);
-			if (should_close_after_disconnect(session_data)) {
+			if (SessionEngine::should_close_after_disconnect(session_data)) {
 				return IOResult::SHUTDOWN;
 			}
 
