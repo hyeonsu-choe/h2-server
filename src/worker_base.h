@@ -91,7 +91,7 @@ class WorkerBase {
 
 			if (listen(sock, SOMAXCONN) < 0) {
 				close(sock);
-				std::cerr << "listen failed" << std::endl;
+				std::cerr << "listen() error" << std::endl;
 				return -1;
 			}
 

@@ -27,7 +27,7 @@ bool Server::add_handler(const METHOD method, std::string_view uri, Handler hand
 
 bool Server::is_runnable()
 {
-	if (config.use_tls) {
+	if (config.mode == MODE_TLS) {
 		if (!file_exists(config.key_path)) {
 			std::cerr << "key file [" << config.key_path << "] doesn't exist" << std::endl;
 			return false;
@@ -49,10 +49,12 @@ void Server::spawn_workers()
 
 	// worker 객체 생성 및 등록 & 스레드 생성
 	for (uint8_t i = 0; i < config.num_threads; i++) {
-		if (config.use_tls) {
+		if (config.mode == MODE_TLS) {
 			workers.emplace_back(std::make_unique<WorkerAdapter<TlsWorker>>(&router));
-		} else {
+		} else if (config.mode == MODE_H2C) {
 			workers.emplace_back(std::make_unique<WorkerAdapter<H2cWorker>>(&router));
+		} else {
+			workers.emplace_back(std::make_unique<WorkerAdapter<H2cIoUringWorker>>(&router));
 		}
 	}
 	for (uint8_t i = 0; i < config.num_threads; i++) {

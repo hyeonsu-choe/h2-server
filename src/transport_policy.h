@@ -5,7 +5,7 @@
 #include "session.h"
 #include "ssl_ctx.h"
 
-enum class IOResult {
+enum class IOResult : uint8_t {
 	SUCCESS,
 	AGAIN,
 	SHUTDOWN,
