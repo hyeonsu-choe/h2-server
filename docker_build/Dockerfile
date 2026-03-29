@@ -7,7 +7,7 @@ RUN apt-get update
 RUN apt-get install -y --no-install-recommends build-essential
 RUN apt-get install -y --no-install-recommends autoconf automake 
 RUN apt-get install -y --no-install-recommends libtool pkg-config
-RUN apt-get install -y --no-install-recommends libssl-dev zlib1g-dev ca-certificates
+RUN apt-get install -y --no-install-recommends libssl-dev zlib1g-dev ca-certificates liburing-dev
 
 RUN rm -rf /var/lib/apt/lists/*
 
@@ -26,10 +26,11 @@ WORKDIR /app
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update
-RUN apt-get install -y --no-install-recommends libssl3 zlib1g ca-certificates
+RUN apt-get install -y --no-install-recommends libssl3 zlib1g ca-certificates liburing2
 
 RUN rm -rf /var/lib/apt/lists/*
 
+COPY --from=build-stage /usr/lib/x86_64-linux-gnu/liburing.so.* /usr/lib/x86_64-linux-gnu/
 COPY --from=build-stage /usr/lib/libnghttp2.so.* /usr/lib/
 COPY --from=build-stage /usr/include/nghttp2 /usr/include/nghttp2
 COPY --from=build-stage /build/src/h2server /app/h2server
