@@ -2,10 +2,10 @@
 
 > 🇺🇸 [영문 버전 보기](./docs/README-eng.md)
 
-**h2server**는 **`Modern C++`**로 구현한 고성능 HTTP/2 서버입니다.  
-Linux 환경에서 동작하며 `epoll`, [`nghttp2`](https://nghttp2.org), [OpenSSL](https://www.openssl.org/)을 사용합니다.  
-선택적인 TLS 연결을 지원하고, `mmap` 기반 캐시를 통해 저지연 파일 서비스를 제공합니다.  
-이 프로젝트는 제가 이전에 Golang으로 개발했던 [webserver](https://github.com/hyeonsu-choe/websvr)에서 영감을 받아 시작되었으며, 이벤트 기반 I/O, TLS 처리, HTTP/2 프로토콜과 같은 시스템 레벨 기술들을 학습하고 벤치마크하기 위한 개인 프로젝트로써 개발되었습니다.
+**h2server**는 **`Modern C++`**로 구현한 고성능 HTTP/2 서버이다.  
+Linux 환경에서 동작하며 `epoll`, [`nghttp2`](https://nghttp2.org), [OpenSSL](https://www.openssl.org/)을 사용한다.  
+선택적인 TLS 연결을 지원하고, `mmap` 기반 캐시를 통해 저지연 파일 서비스를 제공한다.  
+이 프로젝트는 이전에 Golang으로 개발했던 [webserver](https://github.com/hyeonsu-choe/websvr)에서 영감을 받아 시작되었으며, 이벤트 기반 I/O, TLS 처리, HTTP/2 프로토콜과 같은 시스템 레벨 기술들을 학습하고 벤치마크하기 위한 개인 프로젝트로써 시작되었다.
 
 [[상세 문서 바로가기]](https://hyeonsu-choe.github.io/posts/h2_server/)
 
@@ -13,7 +13,7 @@ Linux 환경에서 동작하며 `epoll`, [`nghttp2`](https://nghttp2.org), [Open
 
 ## 📌 Branch Overview
 
-이 저장소는 단일 구현에 머무르지 않고, **고성능 HTTP/2 서버 아키텍처를 단계적으로 실험·검증하는 방향으로 발전**했습니다.
+이 저장소는 단순 기능 구현에 머무르지 않고, **고성능 HTTP/2 서버 아키텍처를 단계적으로 실험·검증하는 방향으로 발전**해 왔다.
 
 - **origin**
   - `acceptor → load balancer → worker` 구조를 기반으로 한 초기 고성능 설계
@@ -24,19 +24,19 @@ Linux 환경에서 동작하며 `epoll`, [`nghttp2`](https://nghttp2.org), [Open
   - readiness 중심 구조의 한계를 보완하기 위해 **H2C 경로에 completion 모델**을 도입
   - 최신 구조 개선과 성능 실험 결과가 반영된 브랜치
 
-> 이 문서는 **origin 브랜치 기준**의 구조와 벤치마크를 설명합니다.  
-> 최신 구조와 최신 성능 결과는 `feature/static-partitioning` 브랜치를 참고해 주세요.
+> 이 문서는 **origin 브랜치 기준**의 구조와 벤치마크를 설명한다.  
+> 최신 구조와 최신 성능 결과는 `feature/static-partitioning` 브랜치를 참고.
 
 ### Latest branch snapshot (`feature/static-partitioning`)
 
-Ubuntu 24.04 환경에서 수행한 최신 benchmark에서는 다음과 같은 결과를 확인했습니다.
+Ubuntu 24.04 환경에서 수행한 최신 benchmark에서 다음과 같은 결과들을 확인하였다.
 
-- 4스레드 이상 구간에서 `h2server h2c` 및 `h2server h2c-io-uring`이 `nghttpd`를 추월
-- 최고 성능은 `h2server_h2c_io_uring_n8`
-- **Max QPS: 605,540**
+- 4 스레드 이상의 구간에서 `h2server h2c` 및 `h2server h2c-io-uring`이 `nghttpd`를 추월
+- 최고 성능은 `h2server의 h2c_io_uring 모드 스레드 8개 구동 시일때`
+  - **Max QPS: 605,540**
 - static partitioning 및 completion 모델이 고부하 구간에서 의미 있는 처리량 개선을 보여줌
 
-> 최신 benchmark 상세 표와 설명은 `feature/static-partitioning` 브랜치 README 또는 상세 문서를 참고해 주세요.
+> 최신 benchmark 상세 표와 설명은 `feature/static-partitioning` 브랜치 README 또는 상세 문서를 참고.
 
 ---
 
@@ -72,10 +72,10 @@ cd h2server
 make -j$(nproc)
 ````
 
-> **참고**
-> 위 명령은 저장소 내 루트 경로에 **Makefile**이 있다고 가정합니다.  
-> `Makefile`이 `src/` 아래에 있다면 다음처럼 실행하세요:
->
+> **참고**  
+> 위 명령은 저장소 내 루트 경로에 **Makefile**이 있다고 가정한다.  
+> `Makefile`이 `src/` 아래에 있다면 다음처럼 실행:
+
 > ```bash
 > cd h2server/src
 > make -j$(nproc)
@@ -92,7 +92,7 @@ docker build -t h2-server -f ./docker_build/Dockerfile .
 ```
 
 > **참고**
-> `docker build`는 프로젝트 루트(`docker_build/`와 `src/`를 모두 포함하는 디렉터리)에서 실행해야 합니다.
+> `docker build`는 프로젝트 루트(`docker_build/`와 `src/`를 모두 포함하는 경로상 위치)에서 실행해야 한다.
 
 ---
 
@@ -183,8 +183,8 @@ docker-compose up -d
 
 ### 핸들러 등록
 
-**Router**는 들어오는 HTTP/2 요청(`method + path`)을 사용자 정의 핸들러에 매핑합니다.  
-이를 통해 I/O 및 프로토콜 처리(`nghttp2`/`OpenSSL`/`epoll`)와 애플리케이션 로직을 분리합니다.
+**Router**는 들어오는 HTTP/2 요청(`method + path`)을 사용자 정의 핸들러에 매핑한다.  
+내부적으로는 이 **Router** 구현을 통해 전체 로직을 I/O 및 프로토콜 처리(`nghttp2`/`OpenSSL`/`epoll`)계층과 애플리케이션 계층으로 명확하게 나눌 수 있게 되었다.
 
 * 지원 메서드: `GET`, `POST`
 * 등록 시점: 서버 시작 전(`listen_and_serve` 호출 전)
@@ -201,7 +201,7 @@ server.add_handler(Method::POST, "/files",            uploader);
 
 ### 핸들러 시그니처
 
-핸들러는 `int handler(Request& request)` 형태를 사용합니다.
+핸들러는 `int handler(Request& request)` 형태를 사용한다.
 
 예시: 파일 다운로드 핸들러
 
@@ -237,10 +237,10 @@ int downloader(Request& request)
 
 ## 📊 Benchmark Summary (origin baseline)
 
-이 문서는 **origin 브랜치 기준** 벤치마크를 포함합니다.  
-이 초기 benchmark는 `mmap` 캐시, TLS 처리, 멀티스레드 확장성 등 **기본 설계의 타당성 검증**에 초점을 두었습니다.
+이 문서는 **origin 브랜치 기준** 벤치마크를 포함한다.  
+초기 benchmark는 `mmap` 캐시, TLS 처리, 멀티스레드 확장성 등 **기본 설계의 타당성 검증**에 초점을 두었었다.
 
-기존 benchmark에서 확인한 핵심 경향은 다음과 같습니다.
+기존 benchmark에서 확인한 중요 내역들을 정리하면 다음과 같다.
 
 * 단일 스레드에서는 `nghttpd`가 더 높은 처리량을 보임
 * 멀티스레드 구간에서는 `h2server`가 더 나은 확장성을 보임
@@ -251,7 +251,7 @@ int downloader(Request& request)
 
 ## 📊 Benchmark (`h2load` 기준)
 
-VMware 가상화 환경 특성상 호스트 OS(Windows)의 스케줄링 간섭 및 자원 경합으로 인해 측정값의 변동 폭(Max-Min)이 다소 크게 발생합니다.
+VMware 가상화 환경 특성상 호스트 OS(Windows)의 스케줄링 간섭 및 자원 경합으로 인해 측정값의 변동 폭(Max-Min)이 다소 크게 발생하였다.
 
 * 통계적 접근:
 
@@ -262,19 +262,19 @@ VMware 가상화 환경 특성상 호스트 OS(Windows)의 스케줄링 간섭 �
 
 > 🧪 **벤치마크 방법**
 >
-> * 각 벤치마크는 케이스 별 5회씩 연속 실행 후 그 결과 값을 사용했습니다.
-> * 지연 시간 백분위는 `h2load`가 출력한 TSV(Tab-Separated Values) 로그를 기준으로 계산했습니다.
-> * CPU 및 메모리 사용량은 60초 부하 구간 동안 `pidstat`로 수집했습니다.
+> * 각 벤치마크는 케이스 별 5회씩 연속 실행 후 그 결과 값을 사용함.
+> * 지연 시간의 백분위는 `h2load`가 출력한 TSV(Tab-Separated Values) 로그를 기준으로 계산함.
+> * CPU 및 메모리 사용량은 60초 부하 구간 동안 `pidstat`를 구동하여 수집함.
 
-> 📌 **핵심 결과**
+> 📌 **중요 결과**
 >
-> * MMAP 최적화는 낮은 동시성과 높은 동시성 환경 모두에서 p99 지연 시간을 60% 이상 줄였습니다.
-> * TLS는 중간 정도의 오버헤드(p99 기준 약 20~30ms)를 유발했지만, 전체 성능은 안정적으로 유지되었습니다.
-> * `mmap` 기반 캐시가 없을 경우 응답 처리 중 많은 파일이 동시에 열리면서 파일 디스크립터 수가 증가했고, 결국 리소스 한계에 도달하면서 실패율 증가로 이어졌습니다.
+> * MMAP 최적화는 낮은 동시성과 높은 동시성 환경 모두에서 p99 지연 시간을 60% 이상 줄였음.
+> * TLS는 중간 정도의 오버헤드(p99 기준 약 20~30ms)를 유발했지만, 전체 성능은 안정적으로 유지되됨.
+> * `mmap` 기반 캐시가 없을 경우 응답 처리 중 많은 파일이 동시에 열리면서 파일 디스크립터 수가 증가했고, 결국 리소스 한계에 도달하면서 실패율 증가로 이어짐.
 
 ### 🌐 Benchmark 환경
 
-모든 벤치마크는 VMware 기반 가상 환경에서 수행되었습니다:
+모든 벤치마크는 VMware 기반 가상 환경에서 수행됨:
 
 * **Host OS**: Windows 11 Pro (64-bit, 24H2)
 * **가상화 환경**: VMware Workstation 17 Pro
@@ -291,13 +291,13 @@ VMware 가상화 환경 특성상 호스트 OS(Windows)의 스케줄링 간섭 �
   * `h2load`: v1.68.0
   * `pidstat`: v12.6.1
 
-모든 벤치마크는 nghttp2의 `h2load`를 사용해 수행했습니다:
+모든 벤치마크는 nghttp2의 `h2load`를 사용하여 수행됨:
 
 ```bash
 ./h2load -c<clients> -m<streams> --warm-up-time=5 -D 60 <web server addr>/index.html
 ```
 
-⚠️ **참고**: `/index.html` 파일 크기는 158바이트입니다.
+⚠️ **참고**: `/index.html` 파일 크기는 158바이트
 
 ### ▶️ 클라이언트 측 테스트 명령
 
@@ -305,7 +305,7 @@ VMware 가상화 환경 특성상 호스트 OS(Windows)의 스케줄링 간섭 �
 ./h2load -c1000 -m100 --warm-up-time=5 -D 60 https://test.com/index.html --log-file=result.tsv
 ```
 
-p99, p90, p50 지연 시간은 TSV 파일로부터 다음과 같이 계산했습니다:
+p99, p90, p50 지연 시간은 TSV 파일로부터 다음과 같이 계산:
 
 ```bash
 # p99
@@ -318,7 +318,7 @@ total=$(cut -f3 result.tsv | wc -l); p90=$(echo "$total * 0.90" | bc | cut -d. -
 total=$(cut -f3 result.tsv | wc -l); p50=$(echo "$total * 0.50" | bc | cut -d. -f1); cut -f3 result.tsv | sort -n | sed -n "${p50}p"
 ```
 
-서버 측 CPU 및 메모리 사용량은 다음 명령으로 측정했습니다:
+서버 측 CPU 및 메모리 사용량은 다음과 같은 명령으로 측정:
 
 ```bash
 pidstat -r -u -p <PID> 1 60
@@ -340,16 +340,16 @@ pidstat -r -u -p <PID> 1 60
 | :---------------------------------------------------: | :---------------------------------------------------: |
 |                      **CPU 사용량**                      |                      **메모리 사용량**                      |
 
-⚠️ **참고**: `libevent-server`의 경우 기본 파일 디스크립터 제한(1024) 상태에서 `h2load -c1000 -m100`을 실행하면 응답 처리 중 리소스 한계에 도달하여 실패율이 20% 미만으로 떨어졌고, 이로 인해 유의미한 성능 측정이 불가능했습니다.  
-따라서 `libevent-server`는 테스트 전에 `ulimit -n`으로 파일 디스크립터 제한을 기본값 1,024에서 65,535로 높인 뒤 벤치마크를 수행했습니다.
+⚠️ **참고**: `libevent-server`의 경우 기본 파일 디스크립터 제한(1024) 상태에서 `h2load -c1000 -m100`을 실행하면 응답 처리 중 리소스 한계에 도달하여 실패율이 20% 미만으로 떨어졌고, 이로 인해 유의미한 성능 측정이 불가능하였다.  
+따라서 `libevent-server`는 테스트 전에 `ulimit -n`으로 파일 디스크립터 제한을 기본값 1,024에서 65,535로 높인 뒤 벤치마크를 수행하였다.
 
 ### 📈 스레드 확장 성능
 
 > **테스트 참고 사항**
 >
-> * `libevent-server`: 단일 스레드만 지원하므로 비교 대상에서 제외했습니다.
-> * `nghttpd`: `-n 8`(워커 스레드 8개)로 실행할 때 기본 파일 디스크립터 제한(1024) 때문에 `h2load`가 무한 대기 상태에 빠졌습니다. 이 테스트만 `ulimit -n`으로 제한을 **65,535**까지 높여 벤치마크를 완료했습니다.
-> * 별도 언급이 없는 다른 테스트는 기본 파일 디스크립터 제한을 사용했습니다.
+> * `libevent-server`: 단일 스레드만 지원하므로 비교 대상에서 제외.
+> * `nghttpd`: `-n 8`(워커 스레드 8개)로 실행할 때 기본 파일 디스크립터 수(1024) 제한 때문에 `h2load`가 무한 대기 상태에 빠지는 문제가 발생함. 이를 해결하기 위해 이 테스트에서만 `ulimit -n`으로 제한을 **65,535**까지 높여 벤치마크를 수행 및 완료하였다.
+> * 별도 언급이 없는 다른 테스트 케이스들의 경우 기본 파일 디스크립터 제한 값을 그대로 사용함.
 
 #### A. QPS
 
@@ -407,43 +407,43 @@ pidstat -r -u -p <PID> 1 60
 
 1. **Throughput (QPS)**
 
-   * 단일 스레드에서는 `nghttpd`가 더 높은 처리량을 보였습니다(205K vs 321K).
-   * 4~8 스레드 환경에서는 `h2server`가 더 효과적으로 확장되며 `nghttpd`를 앞섰습니다.
+   * 단일 스레드에서는 `nghttpd`가 더 높은 처리량을 보여줌(205K vs 321K).
+   * 4~8 스레드 환경에서는 `h2server`가 더 효과적으로 확장(스레드 스케일링) 되며 `nghttpd`를 앞섬.
 
      * h2server: 404K QPS
      * nghttpd: 367K QPS
 
-   👉 멀티스레드 환경에서는 `h2server`가 더 나은 확장성을 보였습니다.
+   👉 멀티스레드 환경에서는 `h2server`가 더 나은 확장성을 보여줌.
 
 2. **p99 Latency**
 
-   * 1~2 스레드 구간에서는 `nghttpd`가 더 낮은 지연 시간을 보였습니다.
-   * 스레드 수가 증가할수록 `h2server`는 지연 시간을 더 효과적으로 낮추며, 4~8 스레드 구간에서 더 낮은 p99 지연 시간을 유지했습니다.
+   * 1~2 스레드 구간에서는 `nghttpd`가 더 낮은 지연 시간을 보여줌.
+   * 스레드 수가 증가할수록 `h2server`는 지연 시간을 더 효과적으로 낮추며, 4~8 스레드 구간에서 더 낮은 p99 지연 시간을 유지함.
 
-   👉 멀티스레드 워크로드에서는 `h2server`가 더 안정적이고 낮은 tail latency를 보여줍니다.
+   👉 멀티스레드 워크로드에서는 `h2server`가 더 안정적이고 낮은 tail latency를 보여줌.
 
 3. **CPU Usage**
 
-   * `h2server`는 CPU 자원을 훨씬 더 적극적으로 활용했습니다(예: 8스레드에서 214% vs 122%).
-   * 이는 더 높은 처리량과 더 낮은 지연 시간을 위해 CPU 사용량을 더 많이 소비하는 트레이드오프를 의미합니다.
+   * `h2server`는 CPU 자원을 훨씬 더 적극적으로 활용함(예: 8스레드에서 214% vs 122%).
+   * 이는 더 높은 처리량과 더 낮은 지연 시간을 위해 CPU 사용량을 더 많이 소비하는 트레이드오프가 존재함을 의미함.
 
 4. **Memory Usage**
 
-   * `nghttpd`는 모든 테스트에서 일관되게 더 낮은 메모리 사용량을 보였습니다.
-   * `h2server`는 약간 더 많은 메모리를 사용했습니다(1스레드 약 141MB → 8스레드 약 143MB).
+   * `nghttpd`는 모든 테스트에서 일관되게 더 낮은 메모리 사용량을 보여줌.
+   * `h2server`는 약간 더 많은 메모리를 사용함(1스레드 약 141MB → 8스레드 약 143MB).
 
 5. **전체 해석**
 
-   * `h2server`: 더 높은 CPU 사용량을 대가로, 멀티스레드 환경에서 높은 처리량과 낮은 지연 시간, 강한 확장성을 보여줍니다.
-   * `nghttpd`: 단일 스레드 성능과 메모리 효율성은 우수하지만, 확장성은 제한적입니다.
+   * `h2server`: 더 높은 CPU 사용량을 대가로, 멀티스레드 환경에서 높은 처리량과 낮은 지연 시간, 강한 확장성을 보여줌.
+   * `nghttpd`: 단일 스레드 성능과 메모리 효율성은 우수하지만, 확장성은 제한적.
 
-   👉 한 줄 요약: **“nghttpd는 단일 스레드 효율에 강하고, h2server는 멀티스레드 확장성과 tail latency(p99)에서 우수합니다.”**
+   👉 한 줄 요약: **“nghttpd는 단일 스레드 효율성이 좋고, h2server는 멀티스레드 확장성과 tail latency(p99)에서 우수”**
 
 ---
 
 ## Detailed Docs
 
-더 자세한 설계 배경, 구현 과정, 이후 브랜치에서의 구조 개선과 최신 benchmark는 아래 문서를 참고해 주세요.
+더 자세한 설계 배경, 구현 과정, 이후 브랜치에서의 구조 개선과 최신 benchmark는 아래 문서를 참고.
 
 * [상세 문서 바로가기](https://hyeonsu-choe.github.io/posts/h2_server/)
 
@@ -451,7 +451,7 @@ pidstat -r -u -p <PID> 1 60
 
 ## 📜 License
 
-이 프로젝트는 [MIT License](./LICENSE)를 따릅니다.
+이 프로젝트는 [MIT License](./LICENSE)를 따름.
 
 ---
 
