@@ -2,13 +2,13 @@
 
 > 🇺🇸 [영문 버전 보기](./docs/README-eng.md)
 
-**h2server**는 **Modern C++**로 구현한 고성능 HTTP/2 서버입니다.  
-Linux 환경에서 `epoll`, `io_uring`, `nghttp2`, `OpenSSL`을 기반으로 동작하며,  
-`mmap` 기반 파일 캐시와 멀티스레드 워커 구조 기반의 저지연·고성능 파일 서비스 제공을 목표로 개발했습니다.
+**h2server**는 **Modern C++** 로 구현된 고성능 HTTP/2 서버이다.  
+Linux 환경에서 동작하며 `epoll`, `io_uring`, `nghttp2`, `OpenSSL`을 사용한다.   
+`mmap` 기반 파일 캐시와 멀티스레드 워커 구조 기반의 저지연·고성능 파일 서비스 제공을 목표로 개발 되었다.
 
-이 프로젝트는 단순한 HTTP/2 기능 구현을 넘어,  
+또한 단순한 HTTP/2 기능 구현을 넘어,  
 **이벤트 기반 I/O**, **TLS 처리**, **멀티스레드 확장성**, **로드 밸런싱**, **정적 분리(static partitioning)** 와 같은  
-시스템 레벨 설계를 직접 검증하고 벤치마크하기 위한 개인 프로젝트입니다.
+시스템 레벨에서의 설계 및 구현, 검증과 벤치마크에 이르기 까지 일련의 모든 단계들을 거치며 지속적으로 개선 되었다.  
 
 [[상세 문서 바로가기]](https://hyeonsu-choe.github.io/posts/h2_server/)
 
@@ -61,7 +61,7 @@ Linux 환경에서 `epoll`, `io_uring`, `nghttp2`, `OpenSSL`을 기반으로 동
 
 ## Architecture
 
-이 프로젝트는 다음과 같은 목표를 중심으로 설계되었습니다.
+이 프로젝트는 다음과 같은 목표들을 달성하기 위한 목적으로 설계 되었다. 
 
 - **이벤트 기반 네트워크 처리**
   - `epoll` 기반 non-blocking I/O
@@ -76,13 +76,13 @@ Linux 환경에서 `epoll`, `io_uring`, `nghttp2`, `OpenSSL`을 기반으로 동
 - **프로토콜 모드 실험**
   - H2(TLS), H2C(cleartext), H2C io_uring 비교
 
-> 더 자세한 설계 배경과 구조 설명은 [상세 문서](https://hyeonsu-choe.github.io/posts/h2_server/)를 참고해 주세요.
+> 더 자세한 설계 배경과 구조 설명은 [상세 문서](https://hyeonsu-choe.github.io/posts/h2_server/)를 참고
 
 ---
 
 ## Branch Overview
 
-이 프로젝트는 기능 구현 자체보다도, **고성능 HTTP/2 서버 아키텍처를 단계적으로 실험·검증하는 과정**에 초점을 두고 발전시켰습니다.
+이 프로젝트는 기능 구현 자체보다도, **고성능 HTTP/2 서버 아키텍처를 단계적으로 실험·검증하는 과정**에 초점을 두고 진행 되었다.
 
 - **origin**
   - `acceptor → load balancer → worker` 구조를 기반으로 한 초기 고성능 설계
@@ -93,7 +93,7 @@ Linux 환경에서 `epoll`, `io_uring`, `nghttp2`, `OpenSSL`을 기반으로 동
   - 기존 readiness 중심 접근의 한계를 보완하기 위해, **H2C 경로에 completion 모델을 적용**하여 고부하 환경에서의 확장성과 처리량 개선을 실험
   - 현재는 각종 구조 개선과 성능 실험 결과가 이 브랜치에 반영된 최신 브랜치
 
-성능 비교는 주로 `origin`과 `static-partitioning`을 기준으로, 아키텍처 변경이 실제 처리량(QPS)과 스레드 확장성에 어떤 영향을 주는지 검증하는 방식으로 진행했습니다.
+성능 비교는 주로 `origin`과 `static-partitioning` 브랜치들을 기준으로, 아키텍처 변경이 실제 처리량(QPS)과 스레드 확장성에 어떤 영향을 주는지 검증하는 방식으로 진행 되었다.
 
 ---
 
@@ -111,19 +111,19 @@ Linux 환경에서 `epoll`, `io_uring`, `nghttp2`, `OpenSSL`을 기반으로 동
 
 ### Build
 
+
+#### 리포지토리 경로 최상단에 `Makefile`이 위치한 경우:
 ```bash
 git clone https://github.com/hyeonsu-choe/h2server.git
 cd h2server
 make -j$(nproc)
 ````
 
-> 저장소 루트에 `Makefile`이 있다고 가정합니다.  
-> `Makefile`이 `src/` 하위에 있다면:  
->
-> ```bash
-> cd h2server/src
-> make -j$(nproc)
-> ```
+#### 만약 `Makefile`이 `src/` 하위에 위치한 경우:
+```bash
+cd h2server/src
+make -j$(nproc)
+```
 
 ### Run (TLS)
 
@@ -157,7 +157,7 @@ cd h2server
 docker build -t h2-server -f ./docker_build/Dockerfile .
 ```
 
-> `docker build`는 프로젝트 루트(`docker_build/`와 `src/`를 모두 포함하는 디렉터리)에서 실행해야 합니다.
+> `docker build`는 프로젝트 루트(`docker_build/`와 `src/`를 하위 경로로써 모두 포함하는 위치)에서 실행해야 함
 
 ---
 
@@ -231,8 +231,8 @@ docker-compose up -d
 
 ### Handler Registration
 
-`Router`는 들어오는 HTTP/2 요청(`method + path`)을 사용자 정의 핸들러에 매핑합니다.  
-이를 통해 I/O 및 프로토콜 처리와 애플리케이션 로직을 분리합니다.
+`Router`는 수신된 HTTP/2 요청(`method + path`)을 사용자 정의 핸들러에 매핑한다.  
+이러한 핸들러 도입을 통해 전체 로직을 아랫단에서의 I/O 및 프로토콜 처리와 윗단에서의 애플리케이션 로직으로 서로 분리하여 운영할 수 있게 된다.
 
 * 지원 메서드: `GET`, `POST`
 * 등록 시점: 서버 시작 전 (`listen_and_serve` 호출 전)
@@ -287,24 +287,25 @@ int downloader(Request& request)
 
 ## Benchmark Summary
 
-이 프로젝트는 단순 기능 구현을 넘어서,  
-**QPS**, **지연 시간**, **CPU/MEM 사용량**, **스레드 확장성**을 중심으로 지속적으로 성능을 비교·분석해 왔습니다.
+본 프로젝트는 단순 기능 구현에만 머물지 않고, 
+**QPS**, **지연 시간**, **CPU/MEM 사용량**, **스레드 확장성**을 중심으로 지속적인 성능 비교·분석을 수행해왔다.
 
-기존 벤치마크에서는 다음과 같은 경향을 확인했습니다.
+기존 벤치마크에서는 다음과 같은 경향을 학인 하였다.
 
 * 단일 스레드에서는 `nghttpd`가 더 높은 처리량을 보임
 * 멀티스레드 구간에서는 `h2server`가 더 나은 확장성을 보임
 * `mmap` 기반 캐시 적용 시 tail latency가 크게 개선됨
 * CPU 사용량은 더 높지만, 고부하 멀티스레드 환경에서 처리량과 지연 시간 측면의 이점이 있음
 
-> 기존 상세 벤치마크 그래프 및 수치는 상세 문서를 참고해 주세요.
+> 기존 상세 벤치마크 그래프 및 수치는 상세 문서를 참고
 
 ---
 
 ## Static Partitioning Benchmark
 
-Ubuntu 24.04 업그레이드 이후의 `static-partitioning` 기준 성능 측정에서는,  
-프로파일링 도구 사용 시 발생되는 오버헤드를 줄이기 위해 `h2load`만 사용하여 **QPS 중심**으로 비교했습니다.
+본인의 개발 및 테스트 환경의 운영체제를 Ubuntu 24.04로 업그레이드 한 이후 부터,   
+`static-partitioning` 성능 측정 시 `h2load`를 사용하여 **QPS** 측정 중심으로 벤치마크를 수행 하였다.  
+이는 프로파일링 도구 사용 시 발생되는 오버헤드를 줄이기 위한 목적도 겸한다.   
 
 ### Test Environment
 
@@ -345,7 +346,7 @@ Ubuntu 24.04 업그레이드 이후의 `static-partitioning` 기준 성능 측�
 ### Summary
 
 * 4스레드 이상 구간에서 `h2server h2c` 및 `h2server h2c-io-uring`이 `nghttpd`를 추월
-* 최고 성능은 `h2server_h2c_io_uring_n8`
+* 최고 성능은 `h2server의 h2c-io-uring 모드를 8개의 스레드`로 구동하였을 때임
 * **Max QPS: 605,540**
 * 정적 분리(static partitioning)와 completion 모델이 고부하 구간에서 유의미한 성능을 보여줌
 
@@ -353,7 +354,7 @@ Ubuntu 24.04 업그레이드 이후의 `static-partitioning` 기준 성능 측�
 
 ## Detailed Docs
 
-더 자세한 설계 배경, 구현 과정, 벤치마크 해석은 아래 문서를 참고해 주세요.
+더 자세한 설계 배경, 구현 과정, 벤치마크 해석은 아래 문서를 참고
 
 * [상세 문서 바로가기](https://hyeonsu-choe.github.io/posts/h2_server/)
 
